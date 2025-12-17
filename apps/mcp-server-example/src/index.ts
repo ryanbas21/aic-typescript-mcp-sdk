@@ -3,6 +3,12 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import {
+  createTokenValidator,
+  createWithAuth,
+  AuthenticationError,
+  AuthorizationError,
+} from '@pingidentity/aic-mcp-sdk';
 
 /**
  * Todo item from JSONPlaceholder API
@@ -15,6 +21,24 @@ interface Todo {
 }
 
 const TYPICODE_BASE_URL = 'https://jsonplaceholder.typicode.com';
+
+/**
+ * Gets configuration from environment variables.
+ */
+function getConfig(): { amUrl: string; clientId: string } {
+  const amUrl = process.env['AM_URL'];
+  const clientId = process.env['AM_CLIENT_ID'];
+
+  if (amUrl === undefined || amUrl.length === 0) {
+    throw new Error('AM_URL environment variable is required');
+  }
+
+  if (clientId === undefined || clientId.length === 0) {
+    throw new Error('AM_CLIENT_ID environment variable is required');
+  }
+
+  return { amUrl, clientId };
+}
 
 /**
  * Fetches todos from JSONPlaceholder API
@@ -50,15 +74,92 @@ async function fetchTodoById(id: number): Promise<Todo> {
 }
 
 /**
- * Creates the MCP server with todos tools
+ * Formats an auth error for MCP response.
+ */
+function formatAuthError(error: AuthenticationError | AuthorizationError): {
+  content: [{ type: 'text'; text: string }];
+  isError: true;
+} {
+  if (error instanceof AuthorizationError) {
+    return {
+      content: [
+        {
+          type: 'text' as const,
+          text: JSON.stringify(
+            {
+              error: 'authorization_error',
+              message: error.message,
+              requiredScopes: error.requiredScopes,
+              presentScopes: error.presentScopes,
+            },
+            null,
+            2
+          ),
+        },
+      ],
+      isError: true,
+    };
+  }
+
+  // AuthenticationError
+  return {
+    content: [
+      {
+        type: 'text' as const,
+        text: JSON.stringify(
+          {
+            error: error.code,
+            message: error.message,
+            authenticationInfo: error.authenticationInfo,
+          },
+          null,
+          2
+        ),
+      },
+    ],
+    isError: true,
+  };
+}
+
+/**
+ * Wraps a tool handler to catch auth errors and return them as MCP error responses.
+ */
+function withErrorHandling<TArgs, TExtra, TResult>(
+  handler: (args: TArgs, extra: TExtra) => TResult | Promise<TResult>
+): (args: TArgs, extra: TExtra) => Promise<TResult | ReturnType<typeof formatAuthError>> {
+  return async (args: TArgs, extra: TExtra) => {
+    try {
+      return await handler(args, extra);
+    } catch (error) {
+      if (error instanceof AuthenticationError || error instanceof AuthorizationError) {
+        return formatAuthError(error);
+      }
+      throw error;
+    }
+  };
+}
+
+/**
+ * Creates the MCP server with todos tools protected by authentication.
  */
 function createServer(): McpServer {
+  const config = getConfig();
+
+  // Create the token validator
+  const validator = createTokenValidator({
+    amUrl: config.amUrl,
+    clientId: config.clientId,
+  });
+
+  // Create the withAuth wrapper
+  const withAuth = createWithAuth({ validator });
+
   const server = new McpServer({
     name: 'todos-server',
     version: '0.0.1',
   });
 
-  // Tool: List all todos or filter by userId
+  // Tool: List all todos or filter by userId (requires 'todos:read' scope)
   server.registerTool(
     'list_todos',
     {
@@ -68,22 +169,28 @@ function createServer(): McpServer {
         limit: z.number().optional().describe('Maximum number of todos to return'),
       },
     },
-    async ({ userId, limit }) => {
-      const todos = await fetchTodos(userId);
-      const limitedTodos = limit !== undefined ? todos.slice(0, limit) : todos;
+    withErrorHandling(
+      withAuth({ requiredScopes: ['todos:read'] }, async ({ userId, limit }, extra) => {
+        // Access authenticated user info
+        const sub = extra.authInfo?.extra?.['sub'];
+        console.error(`[list_todos] Authenticated user: ${String(sub)}`);
 
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: JSON.stringify(limitedTodos, null, 2),
-          },
-        ],
-      };
-    }
+        const todos = await fetchTodos(userId);
+        const limitedTodos = limit !== undefined ? todos.slice(0, limit) : todos;
+
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(limitedTodos, null, 2),
+            },
+          ],
+        };
+      })
+    )
   );
 
-  // Tool: Get a specific todo by ID
+  // Tool: Get a specific todo by ID (requires 'todos:read' scope)
   server.registerTool(
     'get_todo',
     {
@@ -92,21 +199,26 @@ function createServer(): McpServer {
         id: z.number().describe('The todo ID to fetch (1-200)'),
       },
     },
-    async ({ id }) => {
-      const todo = await fetchTodoById(id);
+    withErrorHandling(
+      withAuth({ requiredScopes: ['todos:read'] }, async ({ id }, extra) => {
+        const sub = extra.authInfo?.extra?.['sub'];
+        console.error(`[get_todo] Authenticated user: ${String(sub)}`);
 
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: JSON.stringify(todo, null, 2),
-          },
-        ],
-      };
-    }
+        const todo = await fetchTodoById(id);
+
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(todo, null, 2),
+            },
+          ],
+        };
+      })
+    )
   );
 
-  // Tool: Get todos summary by user
+  // Tool: Get todos summary by user (requires 'todos:read' scope)
   server.registerTool(
     'get_todos_summary',
     {
@@ -115,28 +227,33 @@ function createServer(): McpServer {
         userId: z.number().describe('The user ID to get summary for (1-10)'),
       },
     },
-    async ({ userId }) => {
-      const todos = await fetchTodos(userId);
-      const completed = todos.filter((t) => t.completed).length;
-      const pending = todos.length - completed;
+    withErrorHandling(
+      withAuth({ requiredScopes: ['todos:read'] }, async ({ userId }, extra) => {
+        const sub = extra.authInfo?.extra?.['sub'];
+        console.error(`[get_todos_summary] Authenticated user: ${String(sub)}`);
 
-      const summary = {
-        userId,
-        totalTodos: todos.length,
-        completed,
-        pending,
-        completionRate: `${String(Math.round((completed / todos.length) * 100))}%`,
-      };
+        const todos = await fetchTodos(userId);
+        const completed = todos.filter((t) => t.completed).length;
+        const pending = todos.length - completed;
 
-      return {
-        content: [
-          {
-            type: 'text' as const,
-            text: JSON.stringify(summary, null, 2),
-          },
-        ],
-      };
-    }
+        const summary = {
+          userId,
+          totalTodos: todos.length,
+          completed,
+          pending,
+          completionRate: `${String(Math.round((completed / todos.length) * 100))}%`,
+        };
+
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(summary, null, 2),
+            },
+          ],
+        };
+      })
+    )
   );
 
   return server;
