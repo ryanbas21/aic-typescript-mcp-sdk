@@ -34,7 +34,16 @@ export const createMemoryCache = <T>(defaultTtlMs: number = DEFAULT_TTL_MS): Cac
   };
 
   const set = (key: string, value: T, ttlMs?: number): void => {
-    const expiresAt = Date.now() + (ttlMs ?? defaultTtlMs);
+    const now = Date.now();
+
+    // Clean up expired entries to prevent unbounded memory growth
+    for (const [k, entry] of store.entries()) {
+      if (now > entry.expiresAt) {
+        store.delete(k);
+      }
+    }
+
+    const expiresAt = now + (ttlMs ?? defaultTtlMs);
     store.set(key, { value, expiresAt });
   };
 

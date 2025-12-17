@@ -113,6 +113,9 @@ export const createCachedDiscoveryFetcher = (
   readonly fetch: () => Promise<Result<OidcDiscoveryDocument, ValidationError>>;
   readonly clear: () => void;
 } => {
+  // Track in-flight fetch to deduplicate concurrent requests
+  let inFlightFetch: Promise<Result<OidcDiscoveryDocument, ValidationError>> | undefined;
+
   const fetch = async (): Promise<Result<OidcDiscoveryDocument, ValidationError>> => {
     // Check cache first
     const cached = cache.get(DISCOVERY_CACHE_KEY);
@@ -120,14 +123,24 @@ export const createCachedDiscoveryFetcher = (
       return ok(cached);
     }
 
-    // Fetch fresh document
-    const result = await fetchDiscoveryDocument(httpClient, amUrl, realmPath);
-
-    if (result.isOk()) {
-      cache.set(DISCOVERY_CACHE_KEY, result.value, cacheTtlMs);
+    // Return existing in-flight request if one exists
+    if (inFlightFetch !== undefined) {
+      return inFlightFetch;
     }
 
-    return result;
+    // Create new fetch and track it
+    inFlightFetch = fetchDiscoveryDocument(httpClient, amUrl, realmPath).then((result) => {
+      // Clear in-flight tracker
+      inFlightFetch = undefined;
+
+      if (result.isOk()) {
+        cache.set(DISCOVERY_CACHE_KEY, result.value, cacheTtlMs);
+      }
+
+      return result;
+    });
+
+    return inFlightFetch;
   };
 
   const clear = (): void => {

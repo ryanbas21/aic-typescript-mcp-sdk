@@ -52,7 +52,7 @@ export const createTokenValidator = (
   httpClient: HttpClient = createFetchClient(),
   discoveryCache: Cache<OidcDiscoveryDocument> = createMemoryCache(DEFAULT_DISCOVERY_CACHE_TTL_MS)
 ): TokenValidator => {
-  const { amUrl, realmPath = DEFAULT_REALM_PATH, discoveryCacheTtlMs } = config;
+  const { amUrl, clientId, realmPath = DEFAULT_REALM_PATH, discoveryCacheTtlMs } = config;
 
   // Create cached discovery fetcher
   const discoveryFetcher = createCachedDiscoveryFetcher(
@@ -63,15 +63,20 @@ export const createTokenValidator = (
     discoveryCacheTtlMs ?? DEFAULT_DISCOVERY_CACHE_TTL_MS
   );
 
-  // JWKS instance (jose handles caching internally)
-  let jwksInstance: ReturnType<typeof createJwks> | undefined;
+  // JWKS instance with URI tracking (jose handles caching internally)
+  let jwksInstance:
+    | { readonly uri: string; readonly jwks: ReturnType<typeof createJwks> }
+    | undefined;
 
   /**
    * Gets or creates the JWKS instance.
+   * Recreates the instance if the JWKS URI has changed (e.g., after key rotation).
    */
   const getJwks = (jwksUri: string): ReturnType<typeof createJwks> => {
-    jwksInstance ??= createJwks(jwksUri);
-    return jwksInstance;
+    if (jwksInstance?.uri !== jwksUri) {
+      jwksInstance = { uri: jwksUri, jwks: createJwks(jwksUri) };
+    }
+    return jwksInstance.jwks;
   };
 
   /**
@@ -85,11 +90,12 @@ export const createTokenValidator = (
     const jwks = getJwks(discovery.jwks_uri);
 
     // Verify JWT signature and decode payload
+    // Use clientId as default audience if not specified
     const verifyResult = await verifyJwt(
       token,
       jwks,
       discovery.issuer,
-      options.audience,
+      options.audience ?? clientId,
       options.clockToleranceSeconds
     );
 
