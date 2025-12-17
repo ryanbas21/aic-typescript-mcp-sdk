@@ -1,0 +1,43 @@
+{
+  "name": "ping-aic-ai-sdk",
+  "version": "0.0.0",
+  "private": true,
+  "description": "TypeScript SDK for AIC authentication in AI agents and MCP servers",
+  "keywords": [
+    "aic",
+    "authentication",
+    "mcp",
+    "oauth",
+    "ai-agents",
+    "ping-identity"
+  ],
+  "license": "MIT",
+  "author": "Ping Identity",
+  "type": "module",
+  "scripts": {
+    "build": "pnpm -r run build",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "test": "pnpm -r run test",
+    "typecheck": "pnpm -r run typecheck",
+    "clean": "pnpm -r run clean && rm -rf node_modules",
+    "prepare": "lefthook install"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.17.0",
+    "@types/node": "^22.10.2",
+    "eslint": "^9.17.0",
+    "eslint-config-prettier": "^9.1.0",
+    "lefthook": "^2.0.12",
+    "prettier": "^3.4.2",
+    "typescript": "^5.7.2",
+    "typescript-eslint": "^8.19.0",
+    "vitest": "^2.1.8"
+  },
+  "packageManager": "pnpm@10.15.0",
+  "engines": {
+    "node": ">=20.0.0"
+  }
+}

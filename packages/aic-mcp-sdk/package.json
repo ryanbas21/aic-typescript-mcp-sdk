@@ -1,0 +1,56 @@
+{
+  "name": "@anthropic/aic-mcp-sdk",
+  "version": "0.0.1",
+  "description": "AIC authentication SDK for MCP servers",
+  "type": "module",
+  "main": "./dist/index.js",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": "./dist/index.js",
+      "types": "./dist/index.d.ts"
+    }
+  },
+  "files": [
+    "dist",
+    "README.md"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.lib.json",
+    "clean": "rm -rf dist",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run --passWithNoTests",
+    "test:watch": "vitest"
+  },
+  "keywords": [
+    "aic",
+    "mcp",
+    "authentication",
+    "oauth",
+    "pkce",
+    "token-validation",
+    "ai-agents"
+  ],
+  "license": "MIT",
+  "author": "Ping Identity",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/ping-identity/ping-aic-ai-sdk.git",
+    "directory": "packages/aic-mcp-sdk"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "peerDependencies": {
+    "@modelcontextprotocol/sdk": ">=1.0.0"
+  },
+  "peerDependenciesMeta": {
+    "@modelcontextprotocol/sdk": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}
