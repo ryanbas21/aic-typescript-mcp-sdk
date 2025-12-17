@@ -68,6 +68,34 @@ describe('parseScopes', () => {
       expect(result).toEqual([SCOPE_READ, SCOPE_WRITE]);
     });
   });
+
+  describe('given array of scopes (ForgeRock AM style)', () => {
+    it('returns the array as-is', () => {
+      const scopeArray = [SCOPE_READ, SCOPE_WRITE];
+
+      const result = parseScopes(scopeArray);
+
+      expect(result).toEqual([SCOPE_READ, SCOPE_WRITE]);
+    });
+  });
+
+  describe('given array with whitespace in scope values', () => {
+    it('trims whitespace from scope values', () => {
+      const scopeArray = [`  ${SCOPE_READ}  `, `  ${SCOPE_WRITE}  `];
+
+      const result = parseScopes(scopeArray);
+
+      expect(result).toEqual([SCOPE_READ, SCOPE_WRITE]);
+    });
+  });
+
+  describe('given empty array', () => {
+    it('returns empty array', () => {
+      const result = parseScopes([]);
+
+      expect(result).toEqual([]);
+    });
+  });
 });
 
 describe('getMissingScopes', () => {

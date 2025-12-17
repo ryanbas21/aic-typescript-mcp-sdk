@@ -112,7 +112,7 @@ export interface ValidatedJwtClaims {
   readonly iat: number;
   readonly jti?: string;
   readonly nbf?: number;
-  readonly scope?: string;
+  readonly scope?: string | readonly string[];
   readonly client_id?: string;
   readonly [key: string]: unknown;
 }

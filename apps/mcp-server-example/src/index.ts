@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import 'dotenv/config';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
@@ -25,9 +26,10 @@ const TYPICODE_BASE_URL = 'https://jsonplaceholder.typicode.com';
 /**
  * Gets configuration from environment variables.
  */
-function getConfig(): { amUrl: string; clientId: string } {
+function getConfig(): { amUrl: string; clientId: string; realmPath?: string } {
   const amUrl = process.env['AM_URL'];
   const clientId = process.env['AM_CLIENT_ID'];
+  const realmPath = process.env['AM_REALM_PATH'];
 
   if (amUrl === undefined || amUrl.length === 0) {
     throw new Error('AM_URL environment variable is required');
@@ -37,7 +39,11 @@ function getConfig(): { amUrl: string; clientId: string } {
     throw new Error('AM_CLIENT_ID environment variable is required');
   }
 
-  return { amUrl, clientId };
+  return {
+    amUrl,
+    clientId,
+    ...(realmPath !== undefined && realmPath.length > 0 ? { realmPath } : {}),
+  };
 }
 
 /**
@@ -146,10 +152,11 @@ function createServer(): McpServer {
   const config = getConfig();
 
   // Create the token validator
-  const validator = createTokenValidator({
-    amUrl: config.amUrl,
-    clientId: config.clientId,
-  });
+  const validatorConfig =
+    config.realmPath !== undefined
+      ? { amUrl: config.amUrl, clientId: config.clientId, realmPath: config.realmPath }
+      : { amUrl: config.amUrl, clientId: config.clientId };
+  const validator = createTokenValidator(validatorConfig);
 
   // Create the withAuth wrapper
   const withAuth = createWithAuth({ validator });
@@ -170,7 +177,7 @@ function createServer(): McpServer {
       },
     },
     withErrorHandling(
-      withAuth({ requiredScopes: ['todos:read'] }, async ({ userId, limit }, extra) => {
+      withAuth({ requiredScopes: ['openid'] }, async ({ userId, limit }, extra) => {
         // Access authenticated user info
         const sub = extra.authInfo?.extra?.['sub'];
         console.error(`[list_todos] Authenticated user: ${String(sub)}`);
@@ -200,7 +207,7 @@ function createServer(): McpServer {
       },
     },
     withErrorHandling(
-      withAuth({ requiredScopes: ['todos:read'] }, async ({ id }, extra) => {
+      withAuth({ requiredScopes: ['openid'] }, async ({ id }, extra) => {
         const sub = extra.authInfo?.extra?.['sub'];
         console.error(`[get_todo] Authenticated user: ${String(sub)}`);
 
@@ -228,7 +235,7 @@ function createServer(): McpServer {
       },
     },
     withErrorHandling(
-      withAuth({ requiredScopes: ['todos:read'] }, async ({ userId }, extra) => {
+      withAuth({ requiredScopes: ['openid'] }, async ({ userId }, extra) => {
         const sub = extra.authInfo?.extra?.['sub'];
         console.error(`[get_todos_summary] Authenticated user: ${String(sub)}`);
 

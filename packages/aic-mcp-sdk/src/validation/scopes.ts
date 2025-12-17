@@ -1,17 +1,25 @@
 /**
- * Parses a space-separated scope string into an array.
+ * Parses a scope claim into an array.
+ * Handles both space-separated strings (RFC 6749) and arrays (ForgeRock AM).
  *
- * @param scope - Space-separated scope string (e.g., "read write delete")
+ * @param scope - Space-separated scope string or array of scopes
  * @returns Array of individual scopes
  */
-export const parseScopes = (scope: string | undefined): readonly string[] => {
-  if (!scope) {
+export const parseScopes = (scope: string | readonly string[] | undefined): readonly string[] => {
+  if (scope === undefined) {
     return [];
   }
-  return scope
-    .split(' ')
-    .map((s) => s.trim())
-    .filter((s) => s.length > 0);
+
+  // Handle string format (RFC 6749 style)
+  if (typeof scope === 'string') {
+    return scope
+      .split(' ')
+      .map((s) => s.trim())
+      .filter((s) => s.length > 0);
+  }
+
+  // Handle array format (ForgeRock AM style)
+  return scope.map((s) => s.trim()).filter((s) => s.length > 0);
 };
 
 /**

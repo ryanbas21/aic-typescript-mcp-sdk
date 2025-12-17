@@ -1,7 +1,7 @@
 import type { TokenValidator } from '../validation/types.js';
 import type { McpAuthInfo, WithAuthOptions, TokenExtractorConfig } from './types.js';
 import { AuthenticationError, AuthorizationError } from './types.js';
-import { getMissingScopes } from '../validation/scopes.js';
+import { getMissingScopes, parseScopes } from '../validation/scopes.js';
 
 /** Default environment variable for access token */
 const DEFAULT_ENV_VAR = 'AM_ACCESS_TOKEN';
@@ -189,7 +189,7 @@ export const createWithAuth = (config: CreateWithAuthConfig): WithAuthFn => {
         }
 
         // Build authInfo from validation result
-        const scopes = result.claims.scope?.split(' ').filter((s) => s.length > 0) ?? [];
+        const scopes = parseScopes(result.claims.scope);
 
         authInfo = {
           token,
