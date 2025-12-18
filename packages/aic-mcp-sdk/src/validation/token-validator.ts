@@ -3,6 +3,7 @@ import type {
   TokenValidationResult,
   TokenValidationSuccess,
   AuthenticationInfo,
+  TokenClaims,
 } from '../types.js';
 import type { HttpClient } from '../http/types.js';
 import type { Cache } from '../cache/types.js';
@@ -17,7 +18,14 @@ import type {
 import { createFetchClient } from '../http/fetch-client.js';
 import { createMemoryCache } from '../cache/memory-cache.js';
 import { createCachedDiscoveryFetcher, toAuthenticationInfo } from './discovery.js';
-import { isJwtFormat, createJwks, verifyJwt, validateJwtClaims } from './jwt-validation.js';
+import {
+  isJwtFormat,
+  createJwks,
+  verifyJwt,
+  validateJwtClaims,
+  parseScopes,
+  getMissingScopes,
+} from './jwt-validation.js';
 import {
   createValidationFailure,
   createMissingTokenFailure,
@@ -273,7 +281,8 @@ export const createTokenValidator = (
   const introspectOpaque = async (
     token: string,
     discovery: OidcDiscoveryDocument,
-    config: TokenValidatorConfig
+    config: TokenValidatorConfig,
+    options: ValidationOptions
   ): Promise<TokenValidationResult> => {
     const clientSecret = config.clientSecret;
 
@@ -313,22 +322,6 @@ export const createTokenValidator = (
 
     // Check if token is active
     if (!introspection.active) {
-      // Revoke the inactive token
-      if (discovery.revocation_endpoint) {
-        const revokeResult = await revokeToken(
-          httpClient,
-          token,
-          discovery.revocation_endpoint,
-          clientId,
-          clientSecret
-        );
-
-        if (revokeResult.isErr()) {
-          // Log revocation failure but don't fail validation - token is already inactive
-          console.warn('Failed to revoke inactive token:', revokeResult.error);
-        }
-      }
-
       return createValidationFailure(
         {
           code: 'REVOKED_TOKEN',
@@ -338,15 +331,64 @@ export const createTokenValidator = (
       );
     }
 
-    // TODO: Build TokenClaims from introspection response
-    // For now, return an error indicating this path needs more implementation
-    return createValidationFailure(
-      {
-        code: 'INTROSPECTION_ERROR',
-        message: 'Token introspection is not yet fully implemented',
-      },
-      toAuthenticationInfo(discovery)
-    );
+    // Validate required claims are present in introspection response
+    if (introspection.sub === undefined) {
+      return createValidationFailure(
+        {
+          code: 'MALFORMED_TOKEN',
+          message: 'Introspection response missing required "sub" claim',
+        },
+        toAuthenticationInfo(discovery)
+      );
+    }
+
+    // Use discovery issuer if not in introspection response
+    const iss = introspection.iss ?? discovery.issuer;
+
+    // Use clientId as default audience if not in introspection response
+    const aud = introspection.aud ?? clientId;
+
+    // exp and iat may not be present for opaque tokens - use current time as fallback
+    const now = Math.floor(Date.now() / 1000);
+    const exp = introspection.exp ?? now + 3600; // Default 1 hour if not provided
+    const iat = introspection.iat ?? now;
+
+    // Build TokenClaims from introspection response
+    const claims: TokenClaims = {
+      sub: introspection.sub,
+      iss,
+      aud,
+      exp,
+      iat,
+      ...(introspection.jti !== undefined ? { jti: introspection.jti } : {}),
+      ...(introspection.scope !== undefined ? { scope: introspection.scope } : {}),
+      ...(introspection.client_id !== undefined ? { client_id: introspection.client_id } : {}),
+    };
+
+    // Validate scopes if required
+    const { requiredScopes = [] } = options;
+    if (requiredScopes.length > 0) {
+      const presentScopes = parseScopes(claims.scope);
+      const missingScopes = getMissingScopes(requiredScopes, presentScopes);
+
+      if (missingScopes.length > 0) {
+        return createValidationFailure(
+          {
+            code: 'INSUFFICIENT_SCOPE',
+            message: `Missing required scopes: ${missingScopes.join(', ')}`,
+          },
+          toAuthenticationInfo(discovery)
+        );
+      }
+    }
+
+    const success: TokenValidationSuccess = {
+      valid: true,
+      claims,
+      accessToken: token,
+    };
+
+    return success;
   };
 
   const validate = async (
@@ -375,7 +417,7 @@ export const createTokenValidator = (
     // Check if token is JWT format
     if (!isJwtFormat(token)) {
       // For opaque tokens, attempt introspection if clientSecret is available
-      return introspectOpaque(token, discovery, config as TokenValidatorConfig);
+      return introspectOpaque(token, discovery, config as TokenValidatorConfig, options);
     }
 
     return validateJwt(token, discovery, options);

@@ -204,7 +204,7 @@ export const createWithAuth = (config: CreateWithAuthConfig): WithAuthFn => {
         };
       } else if (options.requiredScopes !== undefined && options.requiredScopes.length > 0) {
         // authInfo exists but we need to validate scopes
-        checkRequiredScopes(options.requiredScopes, [...authInfo.scopes]);
+        checkRequiredScopes(options.requiredScopes, authInfo.scopes);
       }
 
       // Call the handler with authInfo guaranteed

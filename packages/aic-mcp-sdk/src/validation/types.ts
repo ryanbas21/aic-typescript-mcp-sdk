@@ -73,7 +73,11 @@ export interface ValidationOptions {
   readonly requiredScopes?: readonly string[];
   /** Expected audience value(s) */
   readonly audience?: string | readonly string[];
-  /** Clock tolerance in seconds for time-based validation (default: 60) */
+  /**
+   * Clock tolerance in seconds for time-based validation (default: 60).
+   * The 60-second default accommodates clock skew in distributed systems.
+   * For stricter security, use a lower value (e.g., 30 seconds).
+   */
   readonly clockToleranceSeconds?: number;
 }
 
