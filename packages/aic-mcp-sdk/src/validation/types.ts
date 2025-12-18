@@ -74,9 +74,9 @@ export interface ValidationOptions {
   /** Expected audience value(s) */
   readonly audience?: string | readonly string[];
   /**
-   * Clock tolerance in seconds for time-based validation (default: 60).
-   * The 60-second default accommodates clock skew in distributed systems.
-   * For stricter security, use a lower value (e.g., 30 seconds).
+   * Clock tolerance in seconds for time-based validation (default: 15).
+   * Configurable to accommodate clock skew in distributed systems.
+   * Recommended range is 5-30 seconds.
    */
   readonly clockToleranceSeconds?: number;
 }

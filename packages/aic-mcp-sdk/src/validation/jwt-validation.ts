@@ -39,10 +39,9 @@ export const createJwks = (jwksUri: string): ReturnType<typeof createRemoteJWKSe
  * @param jwks - The JWKS key set from createRemoteJWKSet
  * @param issuer - Expected issuer
  * @param audience - Expected audience (optional)
- * @param clockToleranceSeconds - Clock tolerance for time validation (default: 60s).
- *   The 60-second default accommodates clock skew in distributed systems and
- *   environments where time synchronization may be imperfect. For stricter
- *   security requirements, pass a lower value (e.g., 30 seconds).
+ * @param clockToleranceSeconds - Clock tolerance for time validation (default: 15s).
+ *   Configurable to accommodate clock skew in distributed systems.
+ *   Recommended range is 5-30 seconds.
  * @returns Result with verified claims or validation error
  */
 export const verifyJwt = async (
@@ -50,7 +49,7 @@ export const verifyJwt = async (
   jwks: ReturnType<typeof createRemoteJWKSet>,
   issuer: string,
   audience?: string | readonly string[],
-  clockToleranceSeconds = 60
+  clockToleranceSeconds = 15
 ): Promise<Result<ValidatedJwtClaims, ValidationError>> => {
   try {
     // Build options conditionally for exactOptionalPropertyTypes
