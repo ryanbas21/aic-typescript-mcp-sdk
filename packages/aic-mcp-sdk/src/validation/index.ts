@@ -1,5 +1,5 @@
 // Main factory
-export { createTokenValidator } from './token-validator.js';
+export { createTokenValidator, introspectToken, revokeToken } from './token-validator.js';
 
 // Scope utilities
 export { parseScopes, getMissingScopes } from './scopes.js';

@@ -1,3 +1,4 @@
+import { ok, err, type Result } from 'neverthrow';
 import type {
   TokenValidationResult,
   TokenValidationSuccess,
@@ -7,21 +8,167 @@ import type { HttpClient } from '../http/types.js';
 import type { Cache } from '../cache/types.js';
 import type {
   TokenValidator,
-  JwtValidatorConfig,
   ValidationOptions,
   OidcDiscoveryDocument,
+  IntrospectionResponse,
+  TokenValidatorConfig,
+  JwtValidatorConfig,
 } from './types.js';
 import { createFetchClient } from '../http/fetch-client.js';
 import { createMemoryCache } from '../cache/memory-cache.js';
 import { createCachedDiscoveryFetcher, toAuthenticationInfo } from './discovery.js';
 import { isJwtFormat, createJwks, verifyJwt, validateJwtClaims } from './jwt-validation.js';
-import { createValidationFailure, createMissingTokenFailure } from './errors.js';
+import {
+  createValidationFailure,
+  createMissingTokenFailure,
+  createIntrospectionError,
+} from './errors.js';
 
 /** Default discovery cache TTL: 1 hour */
 const DEFAULT_DISCOVERY_CACHE_TTL_MS = 60 * 60 * 1000;
 
 /** Default realm path for AIC */
 const DEFAULT_REALM_PATH = '/am/oauth2/realms/root/realms/alpha';
+
+/**
+ * Introspects an opaque token via RFC 7662 endpoint.
+ * Uses client credentials to authenticate the introspection request.
+ *
+ * @param httpClient - HTTP client for making requests
+ * @param token - The token to introspect
+ * @param introspectionEndpoint - The introspection endpoint URL
+ * @param clientId - OAuth client ID
+ * @param clientSecret - OAuth client secret
+ * @returns Result with introspection response or error
+ */
+export const introspectToken = async (
+  httpClient: HttpClient,
+  token: string,
+  introspectionEndpoint: string,
+  clientId: string,
+  clientSecret: string
+): Promise<Result<IntrospectionResponse, ReturnType<typeof createIntrospectionError>>> => {
+  // Encode client credentials in base64 for Basic auth
+  const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+
+  // Build request body (form-encoded per RFC 7662)
+  const body = new URLSearchParams({
+    token,
+    token_type_hint: 'access_token',
+  }).toString();
+
+  const result = await httpClient.text({
+    url: introspectionEndpoint,
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${credentials}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
+    },
+    body,
+  });
+
+  if (result.isErr()) {
+    return err(
+      createIntrospectionError(
+        `Introspection request failed: ${result.error.message}`,
+        result.error
+      )
+    );
+  }
+
+  try {
+    const introspectionResponse = JSON.parse(result.value.body) as IntrospectionResponse;
+
+    // Validate that we got a valid response
+    if (typeof introspectionResponse.active !== 'boolean') {
+      return err(
+        createIntrospectionError('Invalid introspection response: missing "active" field')
+      );
+    }
+
+    return ok(introspectionResponse);
+  } catch (error) {
+    return err(createIntrospectionError('Failed to parse introspection response', error));
+  }
+};
+
+/**
+ * Revokes a token via RFC 7009 revocation endpoint.
+ * Uses client credentials to authenticate the revocation request.
+ *
+ * @param httpClient - HTTP client for making requests
+ * @param token - The token to revoke
+ * @param revocationEndpoint - The revocation endpoint URL
+ * @param clientId - OAuth client ID
+ * @param clientSecret - OAuth client secret
+ * @returns Result indicating success or error
+ *
+ * @example
+ * ```typescript
+ * const result = await revokeToken(
+ *   httpClient,
+ *   'access_token_value',
+ *   'https://auth.example.com/revoke',
+ *   'client-id',
+ *   'client-secret'
+ * );
+ *
+ * if (result.isOk()) {
+ *   console.log('Token revoked successfully');
+ * } else {
+ *   console.error('Revocation failed:', result.error);
+ * }
+ * ```
+ */
+export const revokeToken = async (
+  httpClient: HttpClient,
+  token: string,
+  revocationEndpoint: string,
+  clientId: string,
+  clientSecret: string
+): Promise<Result<{ readonly revoked: true }, ReturnType<typeof createIntrospectionError>>> => {
+  // Encode client credentials in base64 for Basic auth
+  const credentials = Buffer.from(`${clientId}:${clientSecret}`).toString('base64');
+
+  // Build request body (form-encoded per RFC 7009)
+  const body = new URLSearchParams({
+    token,
+    token_type_hint: 'access_token',
+  }).toString();
+
+  const result = await httpClient.text({
+    url: revocationEndpoint,
+    method: 'POST',
+    headers: {
+      Authorization: `Basic ${credentials}`,
+      'Content-Type': 'application/x-www-form-urlencoded',
+      Accept: 'application/json',
+    },
+    body,
+  });
+
+  if (result.isErr()) {
+    return err(
+      createIntrospectionError(
+        `Token revocation request failed: ${result.error.message}`,
+        result.error
+      )
+    );
+  }
+
+  // RFC 7009 specifies that the server responds with 200 OK on successful revocation
+  // The response body is typically empty or may contain additional information
+  if (result.value.status === 200) {
+    return ok({ revoked: true });
+  }
+
+  return err(
+    createIntrospectionError(
+      `Token revocation failed with status ${String(result.value.status)}: ${result.value.statusText}`
+    )
+  );
+};
 
 /**
  * Creates a token validator for AIC.
@@ -48,7 +195,7 @@ const DEFAULT_REALM_PATH = '/am/oauth2/realms/root/realms/alpha';
  * ```
  */
 export const createTokenValidator = (
-  config: JwtValidatorConfig,
+  config: JwtValidatorConfig | TokenValidatorConfig,
   httpClient: HttpClient = createFetchClient(),
   discoveryCache: Cache<OidcDiscoveryDocument> = createMemoryCache(DEFAULT_DISCOVERY_CACHE_TTL_MS)
 ): TokenValidator => {
@@ -119,6 +266,89 @@ export const createTokenValidator = (
     return success;
   };
 
+  /**
+   * Introspects an opaque token using client credentials.
+   * Only available when clientSecret is provided in config.
+   */
+  const introspectOpaque = async (
+    token: string,
+    discovery: OidcDiscoveryDocument,
+    config: TokenValidatorConfig
+  ): Promise<TokenValidationResult> => {
+    const clientSecret = config.clientSecret;
+
+    if (!clientSecret) {
+      return createValidationFailure(
+        {
+          code: 'MALFORMED_TOKEN',
+          message: 'Opaque token introspection requires clientSecret configuration.',
+        },
+        toAuthenticationInfo(discovery)
+      );
+    }
+
+    if (!discovery.introspection_endpoint) {
+      return createValidationFailure(
+        {
+          code: 'MALFORMED_TOKEN',
+          message: 'Introspection endpoint not available in discovery document.',
+        },
+        toAuthenticationInfo(discovery)
+      );
+    }
+
+    const introspectionResult = await introspectToken(
+      httpClient,
+      token,
+      discovery.introspection_endpoint,
+      clientId,
+      clientSecret
+    );
+
+    if (introspectionResult.isErr()) {
+      return createValidationFailure(introspectionResult.error, toAuthenticationInfo(discovery));
+    }
+
+    const introspection = introspectionResult.value;
+
+    // Check if token is active
+    if (!introspection.active) {
+      // Revoke the inactive token
+      if (discovery.revocation_endpoint) {
+        const revokeResult = await revokeToken(
+          httpClient,
+          token,
+          discovery.revocation_endpoint,
+          clientId,
+          clientSecret
+        );
+
+        if (revokeResult.isErr()) {
+          // Log revocation failure but don't fail validation - token is already inactive
+          console.warn('Failed to revoke inactive token:', revokeResult.error);
+        }
+      }
+
+      return createValidationFailure(
+        {
+          code: 'REVOKED_TOKEN',
+          message: 'Token is not active or has been revoked',
+        },
+        toAuthenticationInfo(discovery)
+      );
+    }
+
+    // TODO: Build TokenClaims from introspection response
+    // For now, return an error indicating this path needs more implementation
+    return createValidationFailure(
+      {
+        code: 'INTROSPECTION_ERROR',
+        message: 'Token introspection is not yet fully implemented',
+      },
+      toAuthenticationInfo(discovery)
+    );
+  };
+
   const validate = async (
     token: string | undefined,
     options: ValidationOptions = {}
@@ -144,14 +374,8 @@ export const createTokenValidator = (
 
     // Check if token is JWT format
     if (!isJwtFormat(token)) {
-      // TODO: Opaque token introspection (RFC 7662) not yet implemented
-      return createValidationFailure(
-        {
-          code: 'MALFORMED_TOKEN',
-          message: 'Token is not a valid JWT. Opaque token introspection is not yet supported.',
-        },
-        toAuthenticationInfo(discovery)
-      );
+      // For opaque tokens, attempt introspection if clientSecret is available
+      return introspectOpaque(token, discovery, config as TokenValidatorConfig);
     }
 
     return validateJwt(token, discovery, options);
