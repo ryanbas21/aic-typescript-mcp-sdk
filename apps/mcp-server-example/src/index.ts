@@ -35,9 +35,15 @@ const MCP_SERVER_URL = process.env['MCP_SERVER_URL'] ?? 'https://mcp.example.com
 /**
  * Gets configuration from environment variables.
  */
-function getConfig(): { amUrl: string; clientId: string; realmPath?: string } {
+function getConfig(): {
+  amUrl: string;
+  clientId: string;
+  clientSecret?: string;
+  realmPath?: string;
+} {
   const amUrl = process.env['AM_URL'];
   const clientId = process.env['AM_CLIENT_ID'];
+  const clientSecret = process.env['AM_CLIENT_SECRET'];
   const realmPath = process.env['AM_REALM_PATH'];
 
   if (amUrl === undefined || amUrl.length === 0) {
@@ -51,6 +57,7 @@ function getConfig(): { amUrl: string; clientId: string; realmPath?: string } {
   return {
     amUrl,
     clientId,
+    ...(clientSecret !== undefined && clientSecret.length > 0 ? { clientSecret } : {}),
     ...(realmPath !== undefined && realmPath.length > 0 ? { realmPath } : {}),
   };
 }
@@ -215,11 +222,11 @@ function createServer(): McpServer {
   const issuerUrl = `${config.amUrl}${realmPath}`;
 
   // Create the token validator
-  const validatorConfig =
-    config.realmPath !== undefined
-      ? { amUrl: config.amUrl, clientId: config.clientId, realmPath: config.realmPath }
-      : { amUrl: config.amUrl, clientId: config.clientId };
-  const validator = createTokenValidator(validatorConfig);
+  // const validatorConfig =
+  //   config.realmPath !== undefined
+  //     ? { amUrl: config.amUrl, clientId: config.clientId, realmPath: config.realmPath }
+  //     : { amUrl: config.amUrl, clientId: config.clientId };
+  const validator = createTokenValidator(config);
 
   // Create the withAuth wrapper
   const withAuth = createWithAuth({ validator });
