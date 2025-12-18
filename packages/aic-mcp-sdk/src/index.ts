@@ -39,6 +39,10 @@ export {
   createWithAuth,
   AuthenticationError,
   AuthorizationError,
+  // RFC 9728 Protected Resource Metadata (for MCP compliance)
+  createProtectedResourceMetadata,
+  formatWwwAuthenticateHeader,
+  parseWwwAuthenticateHeader,
 } from './mcp/index.js';
 export type {
   McpAuthInfo,
@@ -50,4 +54,8 @@ export type {
   TokenExtractorConfig,
   CreateWithAuthConfig,
   WithAuthFn,
+  // RFC 9728 types
+  ProtectedResourceMetadata,
+  ProtectedResourceMetadataConfig,
+  WwwAuthenticateChallenge,
 } from './mcp/index.js';

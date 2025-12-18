@@ -9,6 +9,9 @@ import {
   createWithAuth,
   AuthenticationError,
   AuthorizationError,
+  // RFC 9728 MCP-compliant utilities
+  createProtectedResourceMetadata,
+  formatWwwAuthenticateHeader,
 } from '@pingidentity/aic-mcp-sdk';
 
 /**
@@ -22,6 +25,12 @@ interface Todo {
 }
 
 const TYPICODE_BASE_URL = 'https://jsonplaceholder.typicode.com';
+
+/**
+ * The base URL for this MCP server (used for RFC 9728 metadata).
+ * In production, this should be your actual server URL.
+ */
+const MCP_SERVER_URL = process.env['MCP_SERVER_URL'] ?? 'https://mcp.example.com';
 
 /**
  * Gets configuration from environment variables.
@@ -81,11 +90,22 @@ async function fetchTodoById(id: number): Promise<Todo> {
 
 /**
  * Formats an auth error for MCP response.
+ *
+ * Per MCP spec:
+ * - 401 errors (AuthenticationError) should include WWW-Authenticate header info
+ * - 403 errors (AuthorizationError) indicate insufficient scopes
+ *
+ * Note: For stdio transport, we return error info in the response body.
+ * For HTTP transport, you would set actual HTTP status codes and headers.
  */
-function formatAuthError(error: AuthenticationError | AuthorizationError): {
+function formatAuthError(
+  error: AuthenticationError | AuthorizationError,
+  issuerUrl: string
+): {
   content: [{ type: 'text'; text: string }];
   isError: true;
 } {
+  // 403 Forbidden - Valid token but insufficient scopes
   if (error instanceof AuthorizationError) {
     return {
       content: [
@@ -93,10 +113,12 @@ function formatAuthError(error: AuthenticationError | AuthorizationError): {
           type: 'text' as const,
           text: JSON.stringify(
             {
-              error: 'authorization_error',
+              httpStatus: error.httpStatusCode,
+              error: 'insufficient_scope',
               message: error.message,
               requiredScopes: error.requiredScopes,
               presentScopes: error.presentScopes,
+              missingScopes: error.missingScopes,
             },
             null,
             2
@@ -107,15 +129,43 @@ function formatAuthError(error: AuthenticationError | AuthorizationError): {
     };
   }
 
-  // AuthenticationError
+  // 401 Unauthorized - Authentication required or failed
+  // Include RFC 9728 WWW-Authenticate header format for MCP compliance
+  const wwwAuthenticate = formatWwwAuthenticateHeader(
+    error.code === 'MISSING_TOKEN'
+      ? {
+          resourceMetadataUrl: `${MCP_SERVER_URL}/.well-known/oauth-protected-resource`,
+        }
+      : {
+          resourceMetadataUrl: `${MCP_SERVER_URL}/.well-known/oauth-protected-resource`,
+          error: 'invalid_token',
+          errorDescription: error.message,
+        }
+  );
+
+  // Create RFC 9728 protected resource metadata for client discovery
+  const resourceMetadata = createProtectedResourceMetadata({
+    resourceUrl: MCP_SERVER_URL,
+    authorizationServers: issuerUrl,
+    scopesSupported: ['openid'],
+    resourceName: 'Todos MCP Server',
+  });
+
   return {
     content: [
       {
         type: 'text' as const,
         text: JSON.stringify(
           {
+            httpStatus: error.httpStatusCode,
             error: error.code,
             message: error.message,
+            // MCP-compliant response includes:
+            // 1. WWW-Authenticate header value (for HTTP transport)
+            wwwAuthenticate,
+            // 2. Protected resource metadata (RFC 9728)
+            resourceMetadata,
+            // 3. Legacy authenticationInfo for backwards compatibility
             authenticationInfo: error.authenticationInfo,
           },
           null,
@@ -128,20 +178,28 @@ function formatAuthError(error: AuthenticationError | AuthorizationError): {
 }
 
 /**
- * Wraps a tool handler to catch auth errors and return them as MCP error responses.
+ * Creates a wrapper that catches auth errors and returns them as MCP error responses.
+ *
+ * @param issuerUrl - The authorization server issuer URL for RFC 9728 metadata
  */
-function withErrorHandling<TArgs, TExtra, TResult>(
+function createErrorHandler(
+  issuerUrl: string
+): <TArgs, TExtra, TResult>(
   handler: (args: TArgs, extra: TExtra) => TResult | Promise<TResult>
-): (args: TArgs, extra: TExtra) => Promise<TResult | ReturnType<typeof formatAuthError>> {
-  return async (args: TArgs, extra: TExtra) => {
-    try {
-      return await handler(args, extra);
-    } catch (error) {
-      if (error instanceof AuthenticationError || error instanceof AuthorizationError) {
-        return formatAuthError(error);
+) => (args: TArgs, extra: TExtra) => Promise<TResult | ReturnType<typeof formatAuthError>> {
+  return <TArgs, TExtra, TResult>(
+    handler: (args: TArgs, extra: TExtra) => TResult | Promise<TResult>
+  ) => {
+    return async (args: TArgs, extra: TExtra) => {
+      try {
+        return await handler(args, extra);
+      } catch (error) {
+        if (error instanceof AuthenticationError || error instanceof AuthorizationError) {
+          return formatAuthError(error, issuerUrl);
+        }
+        throw error;
       }
-      throw error;
-    }
+    };
   };
 }
 
@@ -150,6 +208,11 @@ function withErrorHandling<TArgs, TExtra, TResult>(
  */
 function createServer(): McpServer {
   const config = getConfig();
+
+  // Compute the issuer URL for RFC 9728 metadata
+  // Default realm path matches ForgeRock AM's default OAuth2 provider location
+  const realmPath = config.realmPath ?? '/am/oauth2/realms/root/realms/alpha';
+  const issuerUrl = `${config.amUrl}${realmPath}`;
 
   // Create the token validator
   const validatorConfig =
@@ -160,6 +223,9 @@ function createServer(): McpServer {
 
   // Create the withAuth wrapper
   const withAuth = createWithAuth({ validator });
+
+  // Create error handler with issuer URL for MCP-compliant error responses
+  const withErrorHandling = createErrorHandler(issuerUrl);
 
   const server = new McpServer({
     name: 'todos-server',

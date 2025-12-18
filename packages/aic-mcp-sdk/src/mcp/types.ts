@@ -87,11 +87,46 @@ export interface TokenExtractorConfig {
 }
 
 /**
- * Error thrown when authentication fails.
+ * Error thrown when authentication fails (HTTP 401).
+ * This indicates the request lacks valid authentication credentials.
+ *
+ * Per MCP spec, 401 responses should include WWW-Authenticate header
+ * pointing to the protected resource metadata endpoint.
+ *
+ * @example
+ * ```typescript
+ * try {
+ *   await validateToken(token);
+ * } catch (error) {
+ *   if (error instanceof AuthenticationError) {
+ *     const wwwAuth = formatWwwAuthenticateHeader({
+ *       resourceMetadataUrl: 'https://server.com/.well-known/oauth-protected-resource',
+ *       error: 'invalid_token',
+ *       errorDescription: error.message,
+ *     });
+ *     res.status(401).header('WWW-Authenticate', wwwAuth).send();
+ *   }
+ * }
+ * ```
  */
 export class AuthenticationError extends Error {
+  /**
+   * Error code describing the authentication failure.
+   * One of: MISSING_TOKEN, MALFORMED_TOKEN, EXPIRED_TOKEN, INVALID_SIGNATURE,
+   * INVALID_ISSUER, INVALID_AUDIENCE, REVOKED_TOKEN, VALIDATION_ERROR
+   */
   readonly code: string;
+
+  /**
+   * Information about the authorization server for 401 responses.
+   * Can be used to help clients discover where to authenticate.
+   */
   readonly authenticationInfo: AuthenticationInfo | undefined;
+
+  /**
+   * HTTP status code for this error (always 401).
+   */
+  readonly httpStatusCode = 401 as const;
 
   constructor(result: TokenValidationResult & { valid: false }) {
     super(result.message);
@@ -102,11 +137,47 @@ export class AuthenticationError extends Error {
 }
 
 /**
- * Error thrown when authorization fails (e.g., insufficient scopes).
+ * Error thrown when authorization fails due to insufficient scopes (HTTP 403).
+ * This indicates the token is valid but lacks required permissions.
+ *
+ * Per MCP spec, 403 responses should be used for scope failures,
+ * not 401 (which is for authentication failures).
+ *
+ * @example
+ * ```typescript
+ * try {
+ *   checkScopes(requiredScopes, tokenScopes);
+ * } catch (error) {
+ *   if (error instanceof AuthorizationError) {
+ *     res.status(403).json({
+ *       error: 'insufficient_scope',
+ *       required_scopes: error.requiredScopes,
+ *       present_scopes: error.presentScopes,
+ *     });
+ *   }
+ * }
+ * ```
  */
 export class AuthorizationError extends Error {
+  /**
+   * Scopes that were required for this operation.
+   */
   readonly requiredScopes: readonly string[];
+
+  /**
+   * Scopes that were present in the token.
+   */
   readonly presentScopes: readonly string[];
+
+  /**
+   * Scopes that are missing (required but not present).
+   */
+  readonly missingScopes: readonly string[];
+
+  /**
+   * HTTP status code for this error (always 403).
+   */
+  readonly httpStatusCode = 403 as const;
 
   constructor(requiredScopes: readonly string[], presentScopes: readonly string[]) {
     const missing = requiredScopes.filter((s) => !presentScopes.includes(s));
@@ -114,5 +185,6 @@ export class AuthorizationError extends Error {
     this.name = 'AuthorizationError';
     this.requiredScopes = requiredScopes;
     this.presentScopes = presentScopes;
+    this.missingScopes = missing;
   }
 }

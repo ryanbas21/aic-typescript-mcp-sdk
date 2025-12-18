@@ -52,6 +52,18 @@ describe('AuthenticationError', () => {
 
     expect(error).toBeInstanceOf(Error);
   });
+
+  it('has httpStatusCode of 401', () => {
+    const failure = {
+      valid: false as const,
+      error: 'MISSING_TOKEN' as const,
+      message: 'No token',
+    };
+
+    const error = new AuthenticationError(failure);
+
+    expect(error.httpStatusCode).toBe(401);
+  });
 });
 
 describe('AuthorizationError', () => {
@@ -77,6 +89,21 @@ describe('AuthorizationError', () => {
 
     expect(error.requiredScopes).toEqual(requiredScopes);
     expect(error.presentScopes).toEqual(presentScopes);
+  });
+
+  it('computes missingScopes correctly', () => {
+    const requiredScopes = [SCOPE_READ, SCOPE_WRITE, SCOPE_ADMIN];
+    const presentScopes = [SCOPE_READ];
+
+    const error = new AuthorizationError(requiredScopes, presentScopes);
+
+    expect(error.missingScopes).toEqual([SCOPE_WRITE, SCOPE_ADMIN]);
+  });
+
+  it('has httpStatusCode of 403', () => {
+    const error = new AuthorizationError([SCOPE_READ], []);
+
+    expect(error.httpStatusCode).toBe(403);
   });
 
   it('is an instance of Error', () => {
