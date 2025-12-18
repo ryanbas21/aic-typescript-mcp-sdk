@@ -118,7 +118,7 @@ describe('createTokenValidator', () => {
     });
 
     describe('given opaque (non-JWT) token', () => {
-      it('returns MALFORMED_TOKEN failure with introspection not supported message', async () => {
+      it('returns MALFORMED_TOKEN failure when clientSecret not configured', async () => {
         const discovery = createDiscoveryDocument();
         const httpClient = createSuccessHttpClient(discovery);
         const cache = createMockCache<OidcDiscoveryDocument>();
@@ -135,8 +135,8 @@ describe('createTokenValidator', () => {
         expect(result.valid).toBe(false);
         if (!result.valid) {
           expect(result.error).toBe('MALFORMED_TOKEN');
-          expect(result.message).toContain('not a valid JWT');
-          expect(result.message).toContain('introspection');
+          expect(result.message).toContain('Opaque token introspection');
+          expect(result.message).toContain('clientSecret');
         }
       });
 
