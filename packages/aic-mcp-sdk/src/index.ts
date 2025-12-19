@@ -7,9 +7,11 @@
 // Public types
 export type * from './types.js';
 
-// Token validation
+// ============================================================================
+// CORE: Token Validation
+// ============================================================================
+
 export { createTokenValidator } from './validation/index.js';
-export { parseScopes, getMissingScopes } from './validation/index.js';
 export type {
   TokenValidator,
   TokenValidatorConfig,
@@ -18,11 +20,98 @@ export type {
   OidcDiscoveryDocument,
 } from './validation/index.js';
 
-// Cache utilities (for custom cache implementations)
+// ============================================================================
+// CORE: MCP Integration
+// ============================================================================
+
+export {
+  createWithAuth,
+  AuthenticationError,
+  AuthorizationError,
+  // RFC 9728 Protected Resource Metadata (for MCP compliance)
+  createProtectedResourceMetadata,
+  formatWwwAuthenticateHeader,
+} from './mcp/index.js';
+export type {
+  McpAuthInfo,
+  OAuthTokenVerifier,
+  WithAuthOptions,
+  CreateWithAuthConfig,
+  WithAuthFn,
+  // RFC 9728 types
+  ProtectedResourceMetadata,
+  ProtectedResourceMetadataConfig,
+  WwwAuthenticateChallenge,
+} from './mcp/index.js';
+
+// ============================================================================
+// CORE: Token Acquisition (High-Level API)
+// ============================================================================
+
+export {
+  // Token manager (main API)
+  createTokenManager,
+  // Client credentials acquirer (for service tokens / actor tokens)
+  createClientCredentialsAcquirer,
+  // Type guards
+  isConfidentialClient,
+  isPublicClient,
+  isTokenAcquisitionSuccess,
+  isTokenAcquisitionFailure,
+} from './acquisition/index.js';
+export type {
+  // Client configuration
+  ClientType,
+  OAuthClientConfigBase,
+  PublicClientConfig,
+  ConfidentialClientConfig,
+  OAuthClientConfig,
+  TokenAcquisitionConfig,
+  // Authorization state
+  AuthorizationUrlOptions,
+  AuthorizationUrlResult,
+  // Tokens
+  TokenType,
+  TokenSet,
+  TokenResponse,
+  // Token exchange (RFC 8693)
+  SubjectTokenType,
+  TokenExchangeRequest,
+  TokenExchangeResponse,
+  // Errors
+  TokenAcquisitionErrorCode,
+  TokenAcquisitionError,
+  // Results
+  TokenAcquisitionSuccess,
+  TokenAcquisitionFailure,
+  TokenAcquisitionResult,
+  TokenExchangeSuccess,
+  TokenExchangeFailure,
+  TokenExchangeResult,
+  // Token manager
+  ClientCredentialsOptions,
+  RefreshOptions,
+  TokenManagerConfig,
+  TokenManager,
+  // Client credentials acquirer
+  ClientCredentialsConfig,
+  ClientCredentialsAcquirer,
+} from './acquisition/index.js';
+
+// ============================================================================
+// CORE: Storage (for token persistence)
+// ============================================================================
+
+export { createMemoryStorage } from './storage/index.js';
+export type { SecureStorage, StorageEntry } from './storage/index.js';
+
+// ============================================================================
+// ADVANCED: Custom Cache/HTTP Implementations
+// ============================================================================
+
 export { createMemoryCache } from './cache/index.js';
 export type { Cache, CacheEntry } from './cache/index.js';
 
-// HTTP utilities (for custom HTTP client implementations)
 export { createFetchClient } from './http/index.js';
 export type {
   HttpClient,
@@ -32,30 +121,52 @@ export type {
   HttpError,
 } from './http/index.js';
 
-// MCP integration
+// ============================================================================
+// ADVANCED: Discovery (for custom caching strategies)
+// ============================================================================
+
+export { createCachedDiscoveryFetcher } from './validation/index.js';
+export type { CachedDiscoveryFetcherOptions, CachedDiscoveryFetcher } from './validation/index.js';
+
+// ============================================================================
+// ADVANCED: Delegation Chain Utilities (RFC 8693 actor claims)
+// ============================================================================
+
 export {
-  createAmVerifier,
-  createAmVerifierFromValidator,
-  createWithAuth,
-  AuthenticationError,
-  AuthorizationError,
-  // RFC 9728 Protected Resource Metadata (for MCP compliance)
-  createProtectedResourceMetadata,
-  formatWwwAuthenticateHeader,
-  parseWwwAuthenticateHeader,
-} from './mcp/index.js';
+  getDelegationContext,
+  isDelegatedToken,
+  validateDelegationChain,
+} from './delegation/index.js';
 export type {
-  McpAuthInfo,
-  OAuthTokenVerifier,
-  AmVerifierConfig,
-  AmVerifierConfigWithSecret,
-  WithAuthOptions,
-  StdioTokenSource,
-  TokenExtractorConfig,
-  CreateWithAuthConfig,
-  WithAuthFn,
-  // RFC 9728 types
-  ProtectedResourceMetadata,
-  ProtectedResourceMetadataConfig,
-  WwwAuthenticateChallenge,
-} from './mcp/index.js';
+  DelegationActor,
+  DelegationContext,
+  DelegationValidationOptions,
+  DelegationValidationResult,
+} from './delegation/index.js';
+
+// ============================================================================
+// ADVANCED: Client Metadata Documents (MCP spec - dynamic registration)
+// ============================================================================
+
+export {
+  buildClientMetadataDocument,
+  fetchClientMetadataDocument,
+} from './client-metadata/index.js';
+export type {
+  GrantType,
+  ResponseType,
+  TokenEndpointAuthMethod,
+  ClientMetadataDocument,
+  ClientMetadataErrorCode,
+  ClientMetadataError,
+  ClientMetadataOptions,
+  ClientMetadataFetchResult,
+  FetchClientMetadataOptions,
+} from './client-metadata/index.js';
+
+// ============================================================================
+// ADVANCED: PKCE Support Verification (MCP spec compliance)
+// ============================================================================
+
+export { verifyPkceSupport, requirePkceSupport } from './acquisition/index.js';
+export type { PkceSupportInfo, PkceSupportResult } from './acquisition/index.js';

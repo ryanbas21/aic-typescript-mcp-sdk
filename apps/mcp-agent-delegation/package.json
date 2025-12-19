@@ -1,12 +1,12 @@
 {
-  "name": "@pingidentity/mcp-server-example",
+  "name": "@pingidentity/mcp-agent-delegation",
   "version": "0.0.1",
   "private": true,
-  "description": "Example MCP server for testing AIC SDK integration",
+  "description": "MCP server demonstrating agent-to-agent delegation with RFC 8693 token exchange",
   "type": "module",
   "main": "./dist/index.js",
   "bin": {
-    "mcp-server-example": "./dist/index.js"
+    "mcp-agent-delegation": "./dist/index.js"
   },
   "scripts": {
     "build": "tsc -p tsconfig.lib.json",
@@ -17,8 +17,10 @@
   },
   "keywords": [
     "mcp",
-    "example",
-    "todos"
+    "delegation",
+    "agent",
+    "token-exchange",
+    "rfc8693"
   ],
   "license": "MIT",
   "dependencies": {

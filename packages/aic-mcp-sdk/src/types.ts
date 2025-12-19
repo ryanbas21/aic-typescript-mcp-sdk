@@ -40,6 +40,33 @@ export interface TokenValidationFailure {
 export type TokenValidationResult = TokenValidationSuccess | TokenValidationFailure;
 
 /**
+ * Actor claim for token delegation per RFC 8693.
+ *
+ * Represents an entity acting on behalf of the subject.
+ * Can be nested to represent a delegation chain.
+ *
+ * @example
+ * ```typescript
+ * // Single delegation: Agent acting on behalf of user
+ * const act = { sub: "https://agent1.example.com" };
+ *
+ * // Nested delegation: Agent2 → Agent1 → User
+ * const act = {
+ *   sub: "https://agent2.example.com",
+ *   act: { sub: "https://agent1.example.com" }
+ * };
+ * ```
+ */
+export interface ActorClaim {
+  /** Subject identifier of the actor */
+  readonly sub: string;
+  /** Issuer of the actor's identity (optional) */
+  readonly iss?: string | undefined;
+  /** Nested actor claim for delegation chains */
+  readonly act?: ActorClaim | undefined;
+}
+
+/**
  * Standard JWT claims plus common AM-specific claims.
  */
 export interface TokenClaims {
@@ -54,11 +81,17 @@ export interface TokenClaims {
   /** Issued at time (Unix timestamp) */
   readonly iat: number;
   /** JWT ID */
-  readonly jti?: string;
+  readonly jti?: string | undefined;
   /** Scopes granted to this token */
-  readonly scope?: string;
+  readonly scope?: string | undefined;
   /** Client ID that requested the token */
-  readonly client_id?: string;
+  readonly client_id?: string | undefined;
+  /**
+   * Actor claim for delegation per RFC 8693.
+   * Present when the token was obtained via token exchange
+   * and represents the entity acting on behalf of the subject.
+   */
+  readonly act?: ActorClaim | undefined;
   /** Additional custom claims */
   readonly [key: string]: unknown;
 }
