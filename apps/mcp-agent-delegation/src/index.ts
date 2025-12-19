@@ -22,12 +22,15 @@
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import { z } from 'zod';
+import http from 'node:http';
 import {
   createTokenValidator,
   createTokenManager,
   createMemoryStorage,
   createWithAuth,
+  createClientCredentialsAcquirer,
   AuthenticationError,
   AuthorizationError,
   getDelegationContext,
@@ -38,6 +41,7 @@ import {
   type TokenSet,
   type DelegationContext,
   type TokenClaims,
+  type ClientCredentialsAcquirer,
 } from '@pingidentity/aic-mcp-sdk';
 import {
   createDelegationServerConfig,
@@ -64,13 +68,21 @@ interface McpErrorResponse {
 // Delegation Manager
 // ============================================================================
 
+/** Token exchange error with full OAuth error details */
+interface TokenExchangeError {
+  readonly code: string;
+  readonly message: string;
+  readonly errorDescription: string | undefined;
+  readonly errorUri: string | undefined;
+}
+
 interface DelegationManager {
   readonly validator: TokenValidator;
   readonly exchangeToken: (
     userToken: string,
     audience: string,
     scopes?: readonly string[]
-  ) => Promise<{ success: true; tokens: TokenSet } | { success: false; error: string }>;
+  ) => Promise<{ success: true; tokens: TokenSet } | { success: false; error: TokenExchangeError }>;
   readonly getDelegationInfo: (claims: Record<string, unknown>) => DelegationContext | undefined;
   readonly buildTokenClaims: (claims: Record<string, unknown>) => TokenClaims | undefined;
 }
@@ -80,6 +92,44 @@ function createDelegationManager(config: DelegationServerConfig): DelegationMana
 
   const tokenManager: TokenManager = createTokenManager(toTokenManagerConfig(config), storage);
 
+  // Create client credentials acquirer for getting actor token
+  const clientCredentialsAcquirer: ClientCredentialsAcquirer = createClientCredentialsAcquirer({
+    amUrl: config.amUrl,
+    realmPath: config.realmPath,
+    client: config.client,
+  });
+
+  // Cache actor token to avoid fetching on every exchange
+  let cachedActorToken: TokenSet | undefined;
+
+  const getActorToken = async (): Promise<
+    { success: true; tokens: TokenSet } | { success: false; error: TokenExchangeError }
+  > => {
+    // Check if cached token is still valid (with 60s buffer)
+    if (cachedActorToken !== undefined && cachedActorToken.expiresAt > Date.now() + 60000) {
+      console.error('[delegation] Using cached actor token');
+      return { success: true, tokens: cachedActorToken };
+    }
+
+    console.error('[delegation] Acquiring new actor token via client credentials');
+    const result = await clientCredentialsAcquirer.acquire();
+
+    if (result.success) {
+      cachedActorToken = result.tokens;
+      return { success: true, tokens: result.tokens };
+    }
+
+    return {
+      success: false,
+      error: {
+        code: result.error.code,
+        message: `Failed to acquire actor token: ${result.error.message}`,
+        errorDescription: result.error.errorDescription,
+        errorUri: result.error.errorUri,
+      },
+    };
+  };
+
   const validator: TokenValidator = createTokenValidator({
     amUrl: config.amUrl,
     clientId: config.client.clientId,
@@ -88,14 +138,25 @@ function createDelegationManager(config: DelegationServerConfig): DelegationMana
   });
 
   const exchangeToken: DelegationManager['exchangeToken'] = async (userToken, audience, scopes) => {
+    // Step 1: Get MCP server's own token (actor token) for delegation
+    const actorResult = await getActorToken();
+    if (!actorResult.success) {
+      return actorResult;
+    }
+
+    // Step 2: Build token exchange request with both subject and actor tokens
     const request: {
       subjectToken: string;
       subjectTokenType: 'urn:ietf:params:oauth:token-type:access_token';
+      actorToken: string;
+      actorTokenType: 'urn:ietf:params:oauth:token-type:access_token';
       audience: string;
       scope?: string;
     } = {
       subjectToken: userToken,
       subjectTokenType: 'urn:ietf:params:oauth:token-type:access_token',
+      actorToken: actorResult.tokens.accessToken,
+      actorTokenType: 'urn:ietf:params:oauth:token-type:access_token',
       audience,
     };
 
@@ -109,7 +170,16 @@ function createDelegationManager(config: DelegationServerConfig): DelegationMana
       return { success: true, tokens: result.tokens };
     }
 
-    return { success: false, error: result.error.message };
+    // Return full error details for debugging
+    return {
+      success: false,
+      error: {
+        code: result.error.code,
+        message: result.error.message,
+        errorDescription: result.error.errorDescription,
+        errorUri: result.error.errorUri,
+      },
+    };
   };
 
   const buildTokenClaims: DelegationManager['buildTokenClaims'] = (claims) => {
@@ -204,9 +274,18 @@ function createErrorHandler<TArgs, TExtra, TResult>(
 // ============================================================================
 
 /**
+ * Options for creating an MCP server.
+ */
+interface CreateServerOptions {
+  /** Optional function to get the current token (for HTTP mode) */
+  readonly getToken?: () => string | undefined;
+}
+
+/**
  * Creates the MCP server with delegation tools.
  *
  * @param config - Server configuration
+ * @param options - Additional options for server creation
  * @returns Configured McpServer instance
  *
  * @example
@@ -223,9 +302,29 @@ function createErrorHandler<TArgs, TExtra, TResult>(
  * const server = createServer(config);
  * ```
  */
-export function createServer(config: DelegationServerConfig): McpServer {
+export function createServer(
+  config: DelegationServerConfig,
+  options?: CreateServerOptions
+): McpServer {
   const delegation = createDelegationManager(config);
-  const withAuth = createWithAuth({ validator: delegation.validator });
+
+  // Configure token extraction: use custom getter for HTTP, env/meta for stdio
+  // Also configure accepted audiences if specified (allows tokens from public clients)
+  type WithAuthConfigType = Parameters<typeof createWithAuth>[0];
+  const withAuthConfig: WithAuthConfigType = { validator: delegation.validator };
+
+  if (config.acceptedAudiences !== undefined) {
+    (withAuthConfig as { acceptedAudiences: readonly string[] }).acceptedAudiences =
+      config.acceptedAudiences;
+  }
+
+  if (options?.getToken !== undefined) {
+    (
+      withAuthConfig as { tokenExtractor: { stdioTokenSource: () => string | undefined } }
+    ).tokenExtractor = { stdioTokenSource: options.getToken };
+  }
+
+  const withAuth = createWithAuth(withAuthConfig);
 
   const server = new McpServer({
     name: 'agent-delegation-server',
@@ -698,15 +797,10 @@ export function createServer(config: DelegationServerConfig): McpServer {
 // Main Entry Point (for CLI usage)
 // ============================================================================
 
-async function main(): Promise<void> {
-  console.error('[server] Starting Agent Delegation MCP Server');
-
-  // Load config - will use env vars if available, or throw helpful errors
-  const config = createDelegationServerConfig();
-  console.error(`[server] AM URL: ${config.amUrl}`);
-  console.error(`[server] Client ID: ${config.client.clientId}`);
-  console.error(`[server] Downstream API: ${config.downstreamAudience}`);
-
+/**
+ * Starts the server with stdio transport.
+ */
+async function startStdio(config: DelegationServerConfig): Promise<void> {
   const server = createServer(config);
   const transport = new StdioServerTransport();
 
@@ -718,6 +812,217 @@ async function main(): Promise<void> {
     server.close().catch(console.error);
     process.exit(0);
   });
+}
+
+/**
+ * Builds the protected resource metadata (RFC 9728 / MCP spec).
+ * This tells MCP Inspector about this resource server.
+ *
+ * We point to our own proxy endpoint for authorization server metadata
+ * because MCP Inspector uses RFC 8414 path-suffix style URLs, but AIC
+ * uses path-prefix style (/.well-known inside the realm path).
+ */
+function buildProtectedResourceMetadata(
+  _config: DelegationServerConfig,
+  serverUrl: string
+): Record<string, unknown> {
+  // Point to our own server which will proxy the AIC metadata
+  // This avoids CORS issues and URL format incompatibilities
+  return {
+    resource: serverUrl,
+    authorization_servers: [serverUrl],
+    scopes_supported: ['openid'],
+    bearer_methods_supported: ['header'],
+    resource_documentation: `${serverUrl}/docs`,
+  };
+}
+
+/**
+ * Fetches the OIDC configuration from AIC and returns it.
+ */
+async function fetchAicOidcConfig(
+  config: DelegationServerConfig
+): Promise<Record<string, unknown>> {
+  const oidcUrl = `${config.amUrl}${config.realmPath ?? '/am/oauth2/alpha'}/.well-known/openid-configuration`;
+  const response = await fetch(oidcUrl);
+  if (!response.ok) {
+    throw new Error(`Failed to fetch OIDC config: ${String(response.status)}`);
+  }
+  return response.json() as Promise<Record<string, unknown>>;
+}
+
+/**
+ * Starts the server with HTTP/SSE transport for MCP Inspector.
+ */
+async function startHttp(config: DelegationServerConfig, port: number): Promise<void> {
+  const transports = new Map<string, SSEServerTransport>();
+  const sessionTokens = new Map<string, string>(); // sessionId -> access token
+  const serverUrl = `http://localhost:${String(port)}`;
+
+  const httpServer = http.createServer((req, res) => {
+    const url = new URL(req.url ?? '/', serverUrl);
+
+    // Log all requests for debugging
+    console.error(`[http] ${req.method ?? 'GET'} ${url.pathname}`);
+
+    // CORS headers for MCP Inspector
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    // OAuth Authorization Server Metadata (RFC 8414)
+    // Proxy the AIC OIDC configuration to avoid CORS issues
+    if (
+      url.pathname === '/.well-known/oauth-authorization-server' ||
+      url.pathname.startsWith('/.well-known/oauth-authorization-server/') ||
+      url.pathname === '/.well-known/openid-configuration' ||
+      url.pathname.startsWith('/.well-known/openid-configuration/')
+    ) {
+      fetchAicOidcConfig(config)
+        .then((metadata) => {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify(metadata, null, 2));
+        })
+        .catch((error: unknown) => {
+          console.error('[http] Failed to fetch AIC OIDC config:', error);
+          res.writeHead(502, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Failed to fetch authorization server metadata' }));
+        });
+      return;
+    }
+
+    // Protected Resource Metadata (RFC 9728 / MCP spec)
+    // Also handle path-suffixed version per MCP spec
+    if (
+      url.pathname === '/.well-known/oauth-protected-resource' ||
+      url.pathname.startsWith('/.well-known/oauth-protected-resource/')
+    ) {
+      const metadata = buildProtectedResourceMetadata(config, serverUrl);
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(metadata, null, 2));
+      return;
+    }
+
+    if (url.pathname === '/sse') {
+      // SSE endpoint - creates new transport for each connection
+      const transport = new SSEServerTransport('/messages', res);
+      const sessionId = transport.sessionId;
+      transports.set(sessionId, transport);
+
+      // Create server with token getter bound to this session
+      const server = createServer(config, {
+        getToken: () => sessionTokens.get(sessionId),
+      });
+
+      server.connect(transport).catch((error: unknown) => {
+        console.error('[server] SSE connection error:', error);
+      });
+
+      req.on('close', () => {
+        transports.delete(sessionId);
+        sessionTokens.delete(sessionId);
+        server.close().catch(console.error);
+      });
+    } else if (url.pathname === '/messages' && req.method === 'POST') {
+      // Messages endpoint - routes to correct transport
+      const sessionIdParam = url.searchParams.get('sessionId');
+
+      if (sessionIdParam === null) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Missing sessionId' }));
+        return;
+      }
+
+      const transport = transports.get(sessionIdParam);
+
+      if (!transport) {
+        res.writeHead(400, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Invalid sessionId' }));
+        return;
+      }
+
+      // Extract token from Authorization header and store per-session
+      // Handle both "Bearer <token>" and raw "<token>" formats
+      const authHeader = req.headers.authorization;
+      let token: string | undefined;
+
+      if (authHeader) {
+        if (authHeader.startsWith('Bearer ')) {
+          token = authHeader.slice(7);
+        } else if (authHeader.length > 0 && authHeader !== 'Bearer') {
+          // Raw token without Bearer prefix
+          token = authHeader;
+        }
+      }
+
+      if (token) {
+        console.error(
+          `[http] Token received for session ${sessionIdParam}: ${token.substring(0, 20)}...`
+        );
+        sessionTokens.set(sessionIdParam, token);
+      } else {
+        console.error(`[http] No Authorization header for session ${sessionIdParam}`);
+      }
+
+      let body = '';
+      req.on('data', (chunk: Buffer) => {
+        body += chunk.toString();
+      });
+      req.on('end', () => {
+        transport.handlePostMessage(req, res, body);
+      });
+    } else if (url.pathname === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', sessions: transports.size }));
+    } else {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: 'Not found' }));
+    }
+  });
+
+  httpServer.listen(port, () => {
+    console.error(`[server] HTTP server listening on http://localhost:${String(port)}`);
+    console.error(`[server] SSE endpoint: http://localhost:${String(port)}/sse`);
+    console.error(`[server] Use with MCP Inspector: npx @modelcontextprotocol/inspector`);
+  });
+
+  process.on('SIGINT', () => {
+    console.error('[server] Shutting down...');
+    httpServer.close();
+    process.exit(0);
+  });
+}
+
+async function main(): Promise<void> {
+  console.error('[server] Starting Agent Delegation MCP Server');
+
+  // Load config - will use env vars if available, or throw helpful errors
+  const config = createDelegationServerConfig();
+  console.error(`[server] AM URL: ${config.amUrl}`);
+  console.error(`[server] Client ID: ${config.client.clientId}`);
+  console.error(`[server] Downstream API: ${config.downstreamAudience}`);
+
+  // Check for --http flag or HTTP_PORT env var
+  const httpPortArg = process.argv.find((arg) => arg.startsWith('--port='));
+  const httpPort = httpPortArg
+    ? parseInt(httpPortArg.split('=')[1] ?? '3001', 10)
+    : process.env['HTTP_PORT']
+      ? parseInt(process.env['HTTP_PORT'], 10)
+      : undefined;
+
+  const useHttp = process.argv.includes('--http') || httpPort !== undefined;
+
+  if (useHttp) {
+    await startHttp(config, httpPort ?? 3001);
+  } else {
+    await startStdio(config);
+  }
 }
 
 // Only run main if this is the entry point

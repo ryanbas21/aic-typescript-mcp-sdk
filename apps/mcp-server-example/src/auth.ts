@@ -54,6 +54,11 @@ export interface AuthManager {
   readonly getValidator: () => TokenValidator;
 
   /**
+   * Gets the current access token (if authenticated).
+   */
+  readonly getAccessToken: () => Promise<string | undefined>;
+
+  /**
    * Gets the current auth state.
    */
   readonly getAuthState: () => Promise<AuthState>;
@@ -81,10 +86,10 @@ export function createAuthManager(config: McpServerConfig): AuthManager {
 
   const tokenManager: TokenManager = createTokenManager(toTokenManagerConfig(config), storage);
 
+  // JWT validator doesn't need clientSecret - it validates via JWKS
   const validator: TokenValidator = createTokenValidator({
     amUrl: config.amUrl,
     clientId: config.client.clientId,
-    clientSecret: config.client.clientSecret,
     realmPath: config.realmPath,
   });
 
@@ -99,6 +104,14 @@ export function createAuthManager(config: McpServerConfig): AuthManager {
   };
 
   const getValidator: AuthManager['getValidator'] = () => validator;
+
+  const getAccessToken: AuthManager['getAccessToken'] = async () => {
+    const tokens = await tokenManager.getTokenSet();
+    if (tokens === undefined || tokens.expiresAt <= Date.now()) {
+      return undefined;
+    }
+    return tokens.accessToken;
+  };
 
   const getAuthState: AuthManager['getAuthState'] = async () => {
     const userTokens = await tokenManager.getTokenSet();
@@ -118,6 +131,7 @@ export function createAuthManager(config: McpServerConfig): AuthManager {
     startUserAuth,
     handleCallback,
     getValidator,
+    getAccessToken,
     getAuthState,
     logout,
   };

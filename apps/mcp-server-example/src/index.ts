@@ -12,12 +12,80 @@
  */
 
 import 'dotenv/config';
+import http from 'node:http';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
 import { createWithAuth, AuthenticationError, AuthorizationError } from '@pingidentity/aic-mcp-sdk';
 import { createServerConfig, type McpServerConfig } from './config.js';
 import { createAuthManager, isAuthorizationUrlResult, type AuthManager } from './auth.js';
+
+// ============================================================================
+// OAuth Callback Server
+// ============================================================================
+
+/** Pending auth callback resolver (for blocking wait, if needed) */
+let pendingAuthResolve: ((result: { code: string; state: string }) => void) | undefined;
+
+/** Last completed auth result (for non-blocking polling) */
+let lastAuthResult: { code: string; state: string } | undefined;
+
+/**
+ * Starts a minimal HTTP server to capture OAuth callbacks.
+ * Listens on port 3000 for /oauth/callback redirects.
+ */
+function startCallbackServer(): void {
+  const server = http.createServer((req, res) => {
+    const url = new URL(req.url ?? '/', 'http://127.0.0.1:3000');
+
+    if (url.pathname === '/oauth/callback') {
+      const code = url.searchParams.get('code');
+      const state = url.searchParams.get('state');
+
+      if (code !== null && state !== null) {
+        // Store result for polling
+        lastAuthResult = { code, state };
+
+        // Resolve any pending promise
+        if (pendingAuthResolve !== undefined) {
+          pendingAuthResolve({ code, state });
+          pendingAuthResolve = undefined;
+        }
+
+        res.writeHead(200, { 'Content-Type': 'text/html' });
+        res.end(
+          '<html><body style="font-family: system-ui; padding: 40px; text-align: center;">' +
+            '<h1>✓ Authentication Successful!</h1>' +
+            '<p>You can close this window and return to your IDE.</p>' +
+            '</body></html>'
+        );
+      } else {
+        res.writeHead(400, { 'Content-Type': 'text/html' });
+        res.end(
+          '<html><body style="font-family: system-ui; padding: 40px; text-align: center;">' +
+            '<h1>✗ Error</h1>' +
+            '<p>Missing code or state parameter, or no pending authentication.</p>' +
+            '</body></html>'
+        );
+      }
+    } else {
+      res.writeHead(404);
+      res.end();
+    }
+  });
+
+  server.on('error', (err: NodeJS.ErrnoException) => {
+    if (err.code === 'EADDRINUSE') {
+      console.error('[callback-server] Port 3000 already in use - callback server disabled');
+    } else {
+      console.error('[callback-server] Failed to start:', err.message);
+    }
+  });
+
+  server.listen(3000, '127.0.0.1', () => {
+    console.error('[callback-server] Listening on http://127.0.0.1:3000');
+  });
+}
 
 // ============================================================================
 // Types
@@ -177,12 +245,31 @@ function createErrorHandler(
 // Server Creation
 // ============================================================================
 
+/** Cached access token for sync extraction */
+let cachedAccessToken: string | undefined;
+
+/**
+ * Updates the cached access token from auth manager.
+ * Called after successful authentication.
+ */
+async function updateCachedToken(authManager: AuthManager): Promise<void> {
+  cachedAccessToken = await authManager.getAccessToken();
+}
+
 /**
  * Creates the MCP server with authentication.
  */
 function createServer(config: McpServerConfig, authManager: AuthManager): McpServer {
   const validator = authManager.getValidator();
-  const withAuth = createWithAuth({ validator });
+
+  // Custom token extractor that pulls from stored tokens
+  const withAuth = createWithAuth({
+    validator,
+    tokenExtractor: {
+      stdioTokenSource: () => cachedAccessToken,
+    },
+  });
+
   const withErrorHandling = createErrorHandler(config, authManager);
 
   const server = new McpServer({
@@ -196,28 +283,79 @@ function createServer(config: McpServerConfig, authManager: AuthManager): McpSer
 
   /**
    * Tool: Start authentication flow
+   * Returns authorization URL immediately. Use auth_complete after browser login.
    */
   server.registerTool(
     'auth_start',
     {
-      description: 'Start OAuth authentication. Returns an authorization URL to visit.',
+      description:
+        'Start OAuth authentication. Returns a URL to open in browser. After logging in, call auth_complete to finish.',
       inputSchema: {},
     },
     async () => {
       console.error('[auth_start] Starting authentication flow');
 
+      // Clear any previous auth result
+      lastAuthResult = undefined;
+
       const result = await authManager.startUserAuth();
 
-      if (isAuthorizationUrlResult(result)) {
+      if (!isAuthorizationUrlResult(result)) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify({ error: 'Failed to start authentication' }, null, 2),
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      console.error(`[auth_start] Authorization URL: ${result.url}`);
+
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: JSON.stringify(
+              {
+                message:
+                  'Open this URL in your browser to authenticate. After logging in, call auth_complete.',
+                authorizationUrl: result.url,
+              },
+              null,
+              2
+            ),
+          },
+        ],
+      };
+    }
+  );
+
+  /**
+   * Tool: Complete authentication after browser login
+   * Checks for OAuth callback and exchanges code for tokens.
+   */
+  server.registerTool(
+    'auth_complete',
+    {
+      description:
+        'Complete authentication after browser login. Call this after visiting the auth URL.',
+      inputSchema: {},
+    },
+    async () => {
+      console.error('[auth_complete] Checking for OAuth callback...');
+
+      if (lastAuthResult === undefined) {
         return {
           content: [
             {
               type: 'text' as const,
               text: JSON.stringify(
                 {
-                  message: 'Visit the authorization URL to authenticate',
-                  authorizationUrl: result.url,
-                  state: result.state,
+                  status: 'waiting',
+                  message: 'No callback received yet. Please complete the login in your browser.',
                 },
                 null,
                 2
@@ -227,11 +365,50 @@ function createServer(config: McpServerConfig, authManager: AuthManager): McpSer
         };
       }
 
+      const { code, state } = lastAuthResult;
+      console.error('[auth_complete] Callback received, exchanging code for tokens...');
+
+      // Exchange code for tokens
+      const tokenResult = await authManager.handleCallback(code, state);
+
+      // Clear the stored result
+      lastAuthResult = undefined;
+
+      if (tokenResult.success) {
+        console.error('[auth_complete] Authentication successful!');
+
+        // Update cached token for withAuth to use
+        await updateCachedToken(authManager);
+
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: JSON.stringify(
+                {
+                  status: 'success',
+                  message: 'Authentication successful!',
+                  expiresAt: new Date(tokenResult.tokens.expiresAt).toISOString(),
+                  scopes: tokenResult.tokens.scopes,
+                },
+                null,
+                2
+              ),
+            },
+          ],
+        };
+      }
+
+      console.error('[auth_complete] Token exchange failed:', tokenResult.error);
       return {
         content: [
           {
             type: 'text' as const,
-            text: JSON.stringify({ error: 'Failed to start authentication' }, null, 2),
+            text: JSON.stringify(
+              { status: 'error', error: 'Token exchange failed', details: tokenResult.error },
+              null,
+              2
+            ),
           },
         ],
         isError: true,
@@ -257,6 +434,9 @@ function createServer(config: McpServerConfig, authManager: AuthManager): McpSer
       const result = await authManager.handleCallback(code, state);
 
       if (result.success) {
+        // Update cached token for withAuth to use
+        await updateCachedToken(authManager);
+
         return {
           content: [
             {
@@ -466,6 +646,9 @@ async function main(): Promise<void> {
   const config = createServerConfig();
   console.error(`[server] AM URL: ${config.amUrl}`);
   console.error(`[server] Client ID: ${config.client.clientId}`);
+
+  // Start callback server for OAuth redirects
+  startCallbackServer();
 
   const authManager = createAuthManager(config);
   const server = createServer(config, authManager);

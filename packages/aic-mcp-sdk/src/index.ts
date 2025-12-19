@@ -51,6 +51,8 @@ export type {
 export {
   // Token manager (main API)
   createTokenManager,
+  // Client credentials acquirer (for service tokens / actor tokens)
+  createClientCredentialsAcquirer,
   // Type guards
   isConfidentialClient,
   isPublicClient,
@@ -91,6 +93,9 @@ export type {
   RefreshOptions,
   TokenManagerConfig,
   TokenManager,
+  // Client credentials acquirer
+  ClientCredentialsConfig,
+  ClientCredentialsAcquirer,
 } from './acquisition/index.js';
 
 // ============================================================================

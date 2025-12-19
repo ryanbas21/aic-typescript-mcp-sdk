@@ -73,10 +73,42 @@ DOWNSTREAM_API_SCOPES=read write
 pnpm build
 ```
 
-### 3. Run with MCP Inspector
+### 3. Run the Server
+
+**Option A: HTTP Mode (for MCP Inspector)**
 
 ```bash
-npx @anthropic/mcp-inspector node dist/index.js
+# Using --http flag (default port 3001)
+node dist/index.js --http
+
+# Or specify a custom port
+HTTP_PORT=8080 node dist/index.js --http
+```
+
+Then open MCP Inspector and connect to `http://localhost:3001/sse`.
+
+**Option B: Stdio Mode (for Claude Desktop)**
+
+```bash
+node dist/index.js
+```
+
+For Claude Desktop, add to your MCP config:
+
+```json
+{
+  "mcpServers": {
+    "delegation-demo": {
+      "command": "node",
+      "args": ["/path/to/dist/index.js"],
+      "env": {
+        "AM_URL": "https://your-tenant.forgeblocks.com",
+        "AM_CLIENT_ID": "your-client-id",
+        "AM_CLIENT_SECRET": "your-secret"
+      }
+    }
+  }
+}
 ```
 
 ## Tools
@@ -189,6 +221,7 @@ await server.connect(transport);
 | `AM_CLIENT_SECRET` | This server's OAuth client secret |
 | `DOWNSTREAM_API_AUDIENCE` | Target API audience |
 | `DOWNSTREAM_API_SCOPES` | Space-separated scopes |
+| `HTTP_PORT` | Port for HTTP mode (default: 3001) |
 
 ## Understanding the Delegation Flow
 

@@ -245,12 +245,15 @@ export const createTokenValidator = (
     const jwks = getJwks(discovery.jwks_uri);
 
     // Verify JWT signature and decode payload
-    // Use clientId as default audience if not specified
+    // Audience validation is optional - for resource servers accepting tokens
+    // from multiple clients, callers should either:
+    // 1. Pass specific audiences to validate against
+    // 2. Omit audience to skip validation (signature + issuer still verified)
     const verifyResult = await verifyJwt(
       token,
       jwks,
       discovery.issuer,
-      options.audience ?? clientId,
+      options.audience,
       options.clockToleranceSeconds
     );
 

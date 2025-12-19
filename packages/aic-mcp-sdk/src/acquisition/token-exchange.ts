@@ -254,6 +254,18 @@ export const createTokenExchanger = (
     // Convert body to URL-encoded string
     const bodyString = new URLSearchParams(body).toString();
 
+    // Log token exchange request details for debugging
+    console.error('[token-exchange] Token endpoint:', discovery.token_endpoint);
+    console.error('[token-exchange] Subject token:', request.subjectToken);
+    console.error('[token-exchange] Subject token type:', request.subjectTokenType);
+    if (request.actorToken !== undefined) {
+      console.error('[token-exchange] Actor token:', request.actorToken);
+      console.error('[token-exchange] Actor token type:', request.actorTokenType);
+    }
+    console.error('[token-exchange] Audience:', request.audience);
+    console.error('[token-exchange] Scope:', request.scope);
+    console.error('[token-exchange] Client ID (Basic Auth):', config.client.clientId);
+
     try {
       const response = await httpClient.json<unknown>({
         url: discovery.token_endpoint,

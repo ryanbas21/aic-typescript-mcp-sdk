@@ -25,6 +25,13 @@ export interface DelegationServerConfig {
   readonly downstreamAudience: string;
   /** Scopes to request when exchanging tokens for downstream API */
   readonly downstreamScopes: readonly string[];
+  /**
+   * Accepted token audiences for incoming requests.
+   * This allows the server to accept tokens issued for different clients
+   * (e.g., public clients used by MCP Inspector) while using its own
+   * confidential client for outbound operations like token exchange.
+   */
+  readonly acceptedAudiences?: readonly string[];
 }
 
 /**
@@ -48,6 +55,11 @@ export interface DelegationServerConfigOptions {
   readonly downstreamAudience?: string;
   /** Override downstream API scopes (default: DOWNSTREAM_API_SCOPES env var or ['read']) */
   readonly downstreamScopes?: readonly string[];
+  /**
+   * Accepted token audiences (default: ACCEPTED_AUDIENCES env var, space-separated).
+   * If not specified, defaults to accepting the server's own client ID.
+   */
+  readonly acceptedAudiences?: readonly string[];
 }
 
 /**
@@ -94,6 +106,8 @@ export function createDelegationServerConfig(
     'https://api.example.com';
   const downstreamScopes = options.downstreamScopes ??
     parseScopes(process.env['DOWNSTREAM_API_SCOPES']) ?? ['read'];
+  const acceptedAudiences =
+    options.acceptedAudiences ?? parseScopes(process.env['ACCEPTED_AUDIENCES']);
 
   // Validate required fields
   if (!amUrl) {
@@ -114,7 +128,7 @@ export function createDelegationServerConfig(
     );
   }
 
-  return {
+  const result: DelegationServerConfig = {
     amUrl,
     realmPath,
     client: {
@@ -127,6 +141,12 @@ export function createDelegationServerConfig(
     downstreamAudience,
     downstreamScopes,
   };
+
+  if (acceptedAudiences !== undefined) {
+    return { ...result, acceptedAudiences };
+  }
+
+  return result;
 }
 
 /**

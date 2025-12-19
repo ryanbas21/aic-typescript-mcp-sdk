@@ -100,20 +100,49 @@ export const createFetchClient = (options: HttpClientOptions = {}): HttpClient =
   };
 
   const json = async <T>(request: HttpRequest): Promise<Result<HttpResponse<T>, HttpError>> => {
-    const fetchResult = await executeFetch({
-      ...request,
-      headers: {
-        Accept: 'application/json',
-        ...(request.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
-        ...request.headers,
-      },
-    });
+    // For JSON requests, we need to bypass the ok check to read error response bodies
+    // (OAuth error responses are JSON even on 4xx status codes)
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => {
+      controller.abort();
+    }, timeoutMs);
 
-    if (fetchResult.isErr()) {
-      return err(fetchResult.error);
+    let response: Response;
+    try {
+      const fetchOptions: RequestInit = {
+        method: request.method,
+        headers: {
+          Accept: 'application/json',
+          ...(request.body !== undefined ? { 'Content-Type': 'application/json' } : {}),
+          ...baseHeaders,
+          ...request.headers,
+        },
+        signal: controller.signal,
+      };
+
+      if (request.body !== undefined) {
+        fetchOptions.body = request.body;
+      }
+
+      response = await fetch(request.url, fetchOptions);
+      clearTimeout(timeoutId);
+    } catch (error) {
+      clearTimeout(timeoutId);
+
+      if (error instanceof Error && error.name === 'AbortError') {
+        return err({
+          type: 'timeout',
+          message: `Request timed out after ${String(timeoutMs)}ms`,
+          cause: error,
+        });
+      }
+
+      return err({
+        type: 'network',
+        message: error instanceof Error ? error.message : 'Network error',
+        cause: error,
+      });
     }
-
-    const response = fetchResult.value;
 
     try {
       const body = (await response.json()) as T;

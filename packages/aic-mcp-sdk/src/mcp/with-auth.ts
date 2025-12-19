@@ -104,6 +104,14 @@ export interface CreateWithAuthConfig {
   readonly validator: TokenValidator;
   /** Token extraction configuration */
   readonly tokenExtractor?: TokenExtractorConfig;
+  /**
+   * Accepted token audiences.
+   * If specified, tokens must have an audience matching one of these values.
+   * This allows accepting tokens from multiple clients (e.g., public clients
+   * used by MCP Inspector) while using a different confidential client for
+   * outbound operations.
+   */
+  readonly acceptedAudiences?: readonly string[];
 }
 
 /**
@@ -137,7 +145,7 @@ export interface CreateWithAuthConfig {
  * ```
  */
 export const createWithAuth = (config: CreateWithAuthConfig): WithAuthFn => {
-  const { validator, tokenExtractor: extractorConfig = {} } = config;
+  const { validator, tokenExtractor: extractorConfig = {}, acceptedAudiences } = config;
   const extractToken = createTokenExtractor(extractorConfig);
 
   /**
@@ -177,10 +185,18 @@ export const createWithAuth = (config: CreateWithAuthConfig): WithAuthFn => {
           throw new AuthenticationError(failure);
         }
 
-        const validationOptions =
-          options.requiredScopes !== undefined && options.requiredScopes.length > 0
-            ? { requiredScopes: [...options.requiredScopes] }
-            : {};
+        const validationOptions: {
+          requiredScopes?: string[];
+          audience?: readonly string[];
+        } = {};
+
+        if (options.requiredScopes !== undefined && options.requiredScopes.length > 0) {
+          validationOptions.requiredScopes = [...options.requiredScopes];
+        }
+
+        if (acceptedAudiences !== undefined && acceptedAudiences.length > 0) {
+          validationOptions.audience = acceptedAudiences;
+        }
 
         const result = await validator.validate(token, validationOptions);
 
@@ -191,16 +207,27 @@ export const createWithAuth = (config: CreateWithAuthConfig): WithAuthFn => {
         // Build authInfo from validation result
         const scopes = parseScopes(result.claims.scope);
 
+        // Include all claims in extra for delegation chain inspection
+        const extraClaims: Record<string, unknown> = {
+          sub: result.claims.sub,
+          iss: result.claims.iss,
+          aud: result.claims.aud,
+          exp: result.claims.exp,
+          iat: result.claims.iat,
+        };
+
+        // Include act claim if present (for delegation chain)
+        const actClaim = result.claims.act;
+        if (actClaim !== undefined) {
+          extraClaims['act'] = actClaim;
+        }
+
         authInfo = {
           token,
           clientId: result.claims.client_id ?? '',
           scopes,
           expiresAt: result.claims.exp,
-          extra: {
-            sub: result.claims.sub,
-            iss: result.claims.iss,
-            aud: result.claims.aud,
-          },
+          extra: extraClaims,
         };
       } else if (options.requiredScopes !== undefined && options.requiredScopes.length > 0) {
         // authInfo exists but we need to validate scopes
