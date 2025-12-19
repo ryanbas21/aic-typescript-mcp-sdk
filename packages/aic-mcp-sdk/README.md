@@ -2,14 +2,37 @@
 
 Authentication SDK for MCP (Model Context Protocol) servers integrating with PingOne Advanced Identity Cloud (AIC).
 
+## Table of Contents
+
+- [Features](#features)
+- [Installation](#installation)
+- [Quick Start](#quick-start)
+  - [Token Validation](#token-validation)
+  - [Protecting MCP Tools](#protecting-mcp-tools)
+- [Guides](#guides)
+- [API Reference](#api-reference)
+  - [Token Validation](#api-token-validation)
+  - [MCP Integration](#api-mcp-integration)
+  - [Token Acquisition](#api-token-acquisition)
+  - [Token Exchange](#api-token-exchange)
+  - [Delegation Chain](#api-delegation-chain)
+  - [Storage](#api-storage)
+  - [Advanced APIs](#api-advanced)
+- [Error Handling](#error-handling)
+- [Environment Variables](#environment-variables)
+- [Requirements](#requirements)
+
 ## Features
 
-- **JWT Validation** - Verify RS256-signed JWTs using JWKS from OIDC discovery
-- **Token Introspection** - RFC 7662 introspection for opaque tokens
-- **Token Revocation** - RFC 7009 token revocation support
-- **MCP Integration** - `withAuth` wrapper for protecting MCP tools
-- **RFC 9728 Compliance** - Protected Resource Metadata for MCP-compliant 401 responses
-- **Scope Validation** - Fine-grained access control with scope checking
+| Feature | Description |
+|---------|-------------|
+| **JWT Validation** | Verify RS256-signed JWTs using JWKS from OIDC discovery |
+| **Token Introspection** | RFC 7662 introspection for opaque tokens |
+| **Token Acquisition** | OAuth 2.1 flows with PKCE (authorization code, client credentials) |
+| **Token Exchange** | RFC 8693 token exchange for identity delegation |
+| **MCP Integration** | `withAuth` wrapper for protecting MCP tool handlers |
+| **Delegation Chain** | Parse and validate `act` claims for agentic architectures |
+| **RFC 9728** | Protected Resource Metadata for MCP-compliant 401 responses |
 
 ## Installation
 
@@ -21,112 +44,98 @@ pnpm add @pingidentity/aic-mcp-sdk
 
 ## Quick Start
 
-### Basic Token Validation
+### Token Validation
+
+Validate an access token (JWT or opaque):
 
 ```typescript
 import { createTokenValidator } from '@pingidentity/aic-mcp-sdk';
 
 const validator = createTokenValidator({
-  amUrl: 'https://openam-example.forgeblocks.com',
-  clientId: 'my-mcp-server',
+  amUrl: 'https://your-tenant.forgeblocks.com',
+  clientId: 'your-client-id',
+  clientSecret: 'your-client-secret', // Required for opaque token introspection
 });
 
 const result = await validator.validate(accessToken);
 
 if (result.valid) {
-  console.log('User:', result.claims.sub);
+  console.log('Subject:', result.claims.sub);
   console.log('Scopes:', result.claims.scope);
 } else {
-  console.error('Validation failed:', result.error, result.message);
+  console.error('Error:', result.error, result.message);
 }
 ```
 
-### Protecting MCP Tools with `withAuth`
+### Protecting MCP Tools
+
+Use `withAuth` to protect MCP tool handlers:
 
 ```typescript
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createTokenValidator, createWithAuth } from '@pingidentity/aic-mcp-sdk';
 
-// Create validator and auth wrapper
 const validator = createTokenValidator({
-  amUrl: process.env.AM_URL,
-  clientId: process.env.AM_CLIENT_ID,
+  amUrl: process.env.AM_URL!,
+  clientId: process.env.AM_CLIENT_ID!,
+  clientSecret: process.env.AM_CLIENT_SECRET,
 });
 
 const withAuth = createWithAuth({ validator });
 
-// Register protected tool
 server.registerTool(
   'get_user_data',
-  { description: 'Get user data', inputSchema: { ... } },
+  { description: 'Get user data', inputSchema: {} },
   withAuth({ requiredScopes: ['user:read'] }, async (args, extra) => {
     // extra.authInfo is guaranteed to exist here
     const userId = extra.authInfo.extra?.sub;
-
-    return {
-      content: [{ type: 'text', text: `User: ${userId}` }],
-    };
+    return { content: [{ type: 'text', text: `User: ${userId}` }] };
   })
 );
 ```
 
-## Configuration
+## Guides
 
-### Token Validator Options
+| Guide | Description |
+|-------|-------------|
+| [Token Acquisition](./docs/token-acquisition.md) | OAuth 2.1 flows, PKCE, refresh tokens |
+| [Delegation](./docs/delegation.md) | Agent-to-agent delegation with RFC 8693 |
 
-```typescript
-interface TokenValidatorConfig {
-  /** Base URL of the AM instance (e.g., "https://openam-example.forgeblocks.com") */
-  amUrl: string;
-
-  /** OAuth client ID registered in AM */
-  clientId: string;
-
-  /** OAuth client secret (required for token introspection of opaque tokens) */
-  clientSecret?: string;
-
-  /** OAuth realm path (default: "/am/oauth2/realms/root/realms/alpha") */
-  realmPath?: string;
-
-  /** Discovery document cache TTL in ms (default: 3600000 = 1 hour) */
-  discoveryCacheTtlMs?: number;
-}
-```
-
-### Validation Options
-
-```typescript
-interface ValidationOptions {
-  /** Required scopes that must be present in the token */
-  requiredScopes?: readonly string[];
-
-  /** Expected audience value(s) - defaults to clientId */
-  audience?: string | readonly string[];
-
-  /** Clock tolerance in seconds for exp/nbf validation (default: 15, recommended: 5-30) */
-  clockToleranceSeconds?: number;
-}
-```
+---
 
 ## API Reference
 
-### Token Validation
+### API: Token Validation
 
 #### `createTokenValidator(config)`
 
 Creates a token validator instance.
 
 ```typescript
+import { createTokenValidator } from '@pingidentity/aic-mcp-sdk';
+
 const validator = createTokenValidator({
-  amUrl: 'https://openam-example.forgeblocks.com',
-  clientId: 'my-client',
-  clientSecret: 'my-secret', // Optional, enables opaque token introspection
+  amUrl: 'https://your-tenant.forgeblocks.com',
+  clientId: 'your-client-id',
+  clientSecret: 'your-client-secret', // Optional, enables opaque token introspection
+  realmPath: '/am/oauth2/realms/root/realms/alpha', // Optional
+  discoveryCacheTtlMs: 3600000, // Optional, default: 1 hour
 });
 ```
 
+**Config Options:**
+
+| Option | Type | Required | Description |
+|--------|------|----------|-------------|
+| `amUrl` | `string` | Yes | Base URL of the AIC instance |
+| `clientId` | `string` | Yes | OAuth client ID |
+| `clientSecret` | `string` | No | Client secret (required for introspection) |
+| `realmPath` | `string` | No | Realm path (default: `/am/oauth2/realms/root/realms/alpha`) |
+| `discoveryCacheTtlMs` | `number` | No | Discovery cache TTL in ms (default: 3600000) |
+
 #### `validator.validate(token, options?)`
 
-Validates a token (JWT or opaque) and returns a discriminated union result.
+Validates an access token and returns a discriminated union result.
 
 ```typescript
 const result = await validator.validate(token, {
@@ -135,253 +144,500 @@ const result = await validator.validate(token, {
 });
 
 if (result.valid) {
-  // TokenValidationSuccess
+  // result.claims contains validated JWT claims
   console.log(result.claims.sub);
   console.log(result.claims.iss);
-  console.log(result.accessToken);
 } else {
-  // TokenValidationFailure
+  // result.error contains error code
   console.log(result.error);   // 'EXPIRED_TOKEN', 'INVALID_SIGNATURE', etc.
   console.log(result.message);
-  console.log(result.authenticationInfo); // For 401 responses
 }
 ```
+
+**Validation Options:**
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `requiredScopes` | `string[]` | Scopes that must be present |
+| `audience` | `string \| string[]` | Expected audience (default: clientId) |
+| `clockToleranceSeconds` | `number` | Clock skew tolerance (default: 15) |
 
 #### `validator.getAuthenticationInfo()`
 
 Gets authorization server metadata for 401 responses.
 
 ```typescript
-const authInfo = await validator.getAuthenticationInfo();
-// { authorizationEndpoint, tokenEndpoint, issuer, supportedScopes }
+const info = await validator.getAuthenticationInfo();
+// { authorizationEndpoint, tokenEndpoint, issuer, ... }
 ```
 
 #### `validator.refreshCache()`
 
 Forces a refresh of the cached OIDC discovery document and JWKS.
 
-```typescript
-await validator.refreshCache();
-```
+---
 
-### MCP Integration
+### API: MCP Integration
 
 #### `createWithAuth(config)`
 
-Creates a `withAuth` wrapper for protecting MCP tool handlers.
+Creates a `withAuth` wrapper function for protecting MCP tool handlers.
 
 ```typescript
-import { createWithAuth, AuthenticationError, AuthorizationError } from '@pingidentity/aic-mcp-sdk';
+import { createWithAuth } from '@pingidentity/aic-mcp-sdk';
 
 const withAuth = createWithAuth({
   validator,
   tokenExtractor: {
-    envVar: 'AM_ACCESS_TOKEN',        // Environment variable name
-    metaField: 'accessToken',          // Request _meta field name
-    stdioTokenSource: 'both',          // 'env' | 'meta' | 'both'
+    envVar: 'AM_ACCESS_TOKEN',      // Environment variable name
+    metaField: 'accessToken',        // Request _meta field name
+    stdioTokenSource: 'both',        // 'env' | 'meta' | 'both'
   },
 });
 
-// Protect a tool handler
-const protectedHandler = withAuth(
+const handler = withAuth(
   { requiredScopes: ['read', 'write'] },
   async (args, extra) => {
-    // extra.authInfo contains validated token info
     const { token, clientId, scopes, expiresAt, extra: claims } = extra.authInfo;
     return { content: [{ type: 'text', text: 'Success' }] };
   }
 );
 ```
 
-#### Error Classes
+#### `AuthenticationError`
+
+Thrown when authentication fails (HTTP 401).
 
 ```typescript
-// Thrown on authentication failure (HTTP 401)
-class AuthenticationError extends Error {
-  code: string;                          // 'MISSING_TOKEN', 'EXPIRED_TOKEN', etc.
-  authenticationInfo?: AuthenticationInfo;
-  httpStatusCode: 401;
-}
+import { AuthenticationError } from '@pingidentity/aic-mcp-sdk';
 
-// Thrown on authorization failure (HTTP 403)
-class AuthorizationError extends Error {
-  requiredScopes: readonly string[];
-  presentScopes: readonly string[];
-  missingScopes: readonly string[];
-  httpStatusCode: 403;
+try {
+  await protectedHandler(args, extra);
+} catch (error) {
+  if (error instanceof AuthenticationError) {
+    console.log(error.code);              // 'MISSING_TOKEN', 'EXPIRED_TOKEN', etc.
+    console.log(error.authenticationInfo); // For 401 response body
+    console.log(error.httpStatusCode);     // 401
+  }
 }
 ```
 
-### RFC 9728 Protected Resource Metadata
+#### `AuthorizationError`
 
-For MCP-compliant 401 responses:
+Thrown when authorization fails due to insufficient scopes (HTTP 403).
 
 ```typescript
-import {
-  createProtectedResourceMetadata,
-  formatWwwAuthenticateHeader,
-  parseWwwAuthenticateHeader,
-} from '@pingidentity/aic-mcp-sdk';
+import { AuthorizationError } from '@pingidentity/aic-mcp-sdk';
 
-// Create protected resource metadata
+if (error instanceof AuthorizationError) {
+  console.log(error.requiredScopes);  // ['admin']
+  console.log(error.presentScopes);   // ['read', 'write']
+  console.log(error.missingScopes);   // ['admin']
+  console.log(error.httpStatusCode);  // 403
+}
+```
+
+#### `createProtectedResourceMetadata(config)`
+
+Creates RFC 9728 Protected Resource Metadata.
+
+```typescript
+import { createProtectedResourceMetadata } from '@pingidentity/aic-mcp-sdk';
+
 const metadata = createProtectedResourceMetadata({
   resourceUrl: 'https://mcp.example.com',
   authorizationServers: 'https://auth.example.com/oauth2',
-  scopesSupported: ['openid', 'profile', 'todos:read'],
+  scopesSupported: ['openid', 'profile', 'read'],
   resourceName: 'My MCP Server',
 });
+```
 
-// Format WWW-Authenticate header
+#### `formatWwwAuthenticateHeader(options)`
+
+Formats a WWW-Authenticate header for 401 responses.
+
+```typescript
+import { formatWwwAuthenticateHeader } from '@pingidentity/aic-mcp-sdk';
+
 const header = formatWwwAuthenticateHeader({
   resourceMetadataUrl: 'https://mcp.example.com/.well-known/oauth-protected-resource',
   error: 'invalid_token',
   errorDescription: 'Token has expired',
 });
-// => 'Bearer resource_metadata="https://...", error="invalid_token", error_description="Token has expired"'
-
-// Parse WWW-Authenticate header
-const parsed = parseWwwAuthenticateHeader(header);
-// => { scheme: 'Bearer', resourceMetadataUrl: '...', error: '...', errorDescription: '...' }
+// => 'Bearer resource_metadata="https://...", error="invalid_token", ...'
 ```
 
-### Scope Utilities
+---
+
+### API: Token Acquisition
+
+#### `createTokenManager(config)`
+
+Creates a high-level token manager for OAuth flows.
 
 ```typescript
-import { parseScopes, getMissingScopes } from '@pingidentity/aic-mcp-sdk';
+import { createTokenManager } from '@pingidentity/aic-mcp-sdk';
 
-// Parse scope string or array
-const scopes = parseScopes('openid profile email');
-// => ['openid', 'profile', 'email']
-
-const scopes2 = parseScopes(['read', 'write']);
-// => ['read', 'write']
-
-// Check for missing scopes
-const missing = getMissingScopes(['admin', 'read'], ['read', 'write']);
-// => ['admin']
+const tokenManager = createTokenManager({
+  amUrl: 'https://your-tenant.forgeblocks.com',
+  realmPath: '/am/oauth2/realms/root/realms/alpha',
+  client: {
+    clientType: 'confidential',
+    clientId: 'my-mcp-server',
+    clientSecret: 'my-secret',
+    redirectUri: 'https://mcp.example.com/callback',
+    scopes: ['openid', 'profile'],
+  },
+});
 ```
 
-### Custom HTTP Client & Cache
-
-For advanced use cases, you can provide custom implementations:
+**Client Configuration:**
 
 ```typescript
-import {
-  createTokenValidator,
-  createFetchClient,
-  createMemoryCache,
-  type HttpClient,
-  type Cache,
-} from '@pingidentity/aic-mcp-sdk';
+// Public client (browser apps, native apps)
+interface PublicClientConfig {
+  clientType: 'public';
+  clientId: string;
+  redirectUri: string;
+  scopes: readonly string[];
+}
 
-// Custom HTTP client (e.g., with retry logic)
-const customHttpClient: HttpClient = createFetchClient({
-  timeout: 10000,
+// Confidential client (server apps)
+interface ConfidentialClientConfig {
+  clientType: 'confidential';
+  clientId: string;
+  clientSecret: string;
+  redirectUri: string;
+  scopes: readonly string[];
+}
+```
+
+#### Token Manager Methods
+
+| Method | Description |
+|--------|-------------|
+| `startAuthorization(options?)` | Start authorization code flow with PKCE |
+| `handleCallback(code, state)` | Exchange authorization code for tokens |
+| `getAccessToken()` | Get valid access token (auto-refreshes if needed) |
+| `getTokenSet()` | Get current token set without refresh |
+| `getServiceToken(options?)` | Get token via client credentials (confidential only) |
+| `exchangeToken(request)` | Exchange token via RFC 8693 (confidential only) |
+| `revokeToken()` | Revoke current access token |
+| `clearTokens()` | Clear all stored tokens |
+
+**Authorization Code Flow:**
+
+```typescript
+// 1. Start authorization (returns URL for browser redirect)
+const result = await tokenManager.startAuthorization({
+  additionalScopes: ['custom:scope'],
+  resource: 'https://api.example.com',
 });
 
-// Custom cache (e.g., Redis-backed)
-const customCache: Cache<OidcDiscoveryDocument> = createMemoryCache(
-  60 * 60 * 1000 // 1 hour TTL
-);
+if ('url' in result) {
+  // Redirect user to result.url
+}
 
-const validator = createTokenValidator(
-  { amUrl, clientId },
-  customHttpClient,
-  customCache
-);
+// 2. Handle callback at your redirect URI
+const tokenResult = await tokenManager.handleCallback(code, state);
+
+if (tokenResult.success) {
+  console.log('Access token:', tokenResult.tokens.accessToken);
+}
+
+// 3. Later: get valid access token (auto-refreshes)
+const accessResult = await tokenManager.getAccessToken();
+
+if (accessResult.success) {
+  console.log('Token:', accessResult.accessToken);
+}
 ```
 
-## Token Validation Flow
+**Client Credentials Flow:**
 
-1. **Check token exists** → Returns `MISSING_TOKEN` if empty
-2. **Detect token format** → JWT (3 dot-separated parts) or opaque
-3. **For JWTs:**
-   - Fetch OIDC discovery document (cached 1 hour)
-   - Verify signature against JWKS
-   - Validate claims (exp, iss, aud)
-   - Check required scopes
-4. **For opaque tokens:**
-   - Requires `clientSecret` in config
-   - Calls RFC 7662 introspection endpoint
-   - Validates `active` status and scopes
+```typescript
+const result = await tokenManager.getServiceToken({
+  scopes: ['service:read'],
+  resource: 'https://api.example.com',
+});
 
-## Error Codes
+if (result.success) {
+  console.log('Service token:', result.tokens.accessToken);
+}
+```
+
+---
+
+### API: Token Exchange
+
+RFC 8693 token exchange for identity delegation.
+
+```typescript
+const result = await tokenManager.exchangeToken({
+  subjectToken: userAccessToken,
+  subjectTokenType: 'urn:ietf:params:oauth:token-type:access_token',
+  audience: 'https://downstream-api.example.com',
+  scope: 'read write',
+});
+
+if (result.success) {
+  console.log('Exchanged token:', result.tokens.accessToken);
+  console.log('Token type:', result.issuedTokenType);
+}
+```
+
+**Token Exchange Request:**
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `subjectToken` | `string` | Yes | Token to exchange |
+| `subjectTokenType` | `string` | Yes | Subject token type URI |
+| `audience` | `string` | No | Target audience |
+| `scope` | `string` | No | Requested scopes |
+| `resource` | `string` | No | Target resource |
+| `actorToken` | `string` | No | Actor token for delegation |
+| `actorTokenType` | `string` | No | Actor token type URI |
+
+**Token Type URIs:**
+
+```typescript
+// Standard OAuth token types
+'urn:ietf:params:oauth:token-type:access_token'
+'urn:ietf:params:oauth:token-type:refresh_token'
+'urn:ietf:params:oauth:token-type:id_token'
+'urn:ietf:params:oauth:token-type:jwt'
+```
+
+---
+
+### API: Delegation Chain
+
+Utilities for working with RFC 8693 actor (`act`) claims.
+
+#### `isDelegatedToken(claims)`
+
+Checks if a token has delegation (contains `act` claim).
+
+```typescript
+import { isDelegatedToken } from '@pingidentity/aic-mcp-sdk';
+
+if (isDelegatedToken(claims)) {
+  console.log('Token was obtained through delegation');
+}
+```
+
+#### `getDelegationContext(claims)`
+
+Extracts full delegation context from token claims.
+
+```typescript
+import { getDelegationContext } from '@pingidentity/aic-mcp-sdk';
+
+const context = getDelegationContext(claims);
+
+console.log(context.subject);        // 'user@example.com'
+console.log(context.isDelegated);    // true
+console.log(context.depth);          // 2
+console.log(context.immediateActor); // { sub: 'https://mcp-server.example.com' }
+console.log(context.chain);          // [{ sub: '...' }, { sub: '...' }]
+```
+
+**DelegationContext:**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `subject` | `string` | Original subject (end user) |
+| `isDelegated` | `boolean` | Whether token has delegation |
+| `depth` | `number` | Delegation chain depth (0 = no delegation) |
+| `immediateActor` | `DelegationActor \| undefined` | Direct caller |
+| `chain` | `DelegationActor[]` | Full actor chain |
+
+#### `validateDelegationChain(claims, options)`
+
+Validates delegation chain against policy constraints.
+
+```typescript
+import { validateDelegationChain } from '@pingidentity/aic-mcp-sdk';
+
+const result = validateDelegationChain(claims, {
+  maxDepth: 3,
+  requireDelegation: true,
+  requiredActors: ['https://trusted-agent.example.com'],
+  forbiddenActors: ['https://blocked-service.example.com'],
+});
+
+if (!result.valid) {
+  console.error('Policy violations:', result.errors);
+}
+```
+
+**Validation Options:**
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `maxDepth` | `number` | Maximum allowed delegation depth |
+| `requireDelegation` | `boolean` | Token must have `act` claim |
+| `requiredActors` | `string[]` | Actors that must be in the chain |
+| `forbiddenActors` | `string[]` | Actors that must NOT be in the chain |
+
+---
+
+### API: Storage
+
+#### `createMemoryStorage()`
+
+Creates in-memory storage for tokens and state.
+
+```typescript
+import { createMemoryStorage } from '@pingidentity/aic-mcp-sdk';
+
+const storage = createMemoryStorage();
+
+await storage.set('key', 'value', 3600000); // Optional TTL in ms
+const value = await storage.get('key');
+await storage.delete('key');
+await storage.clear();
+```
+
+**SecureStorage Interface:**
+
+```typescript
+interface SecureStorage {
+  get(key: string): Promise<string | undefined>;
+  set(key: string, value: string, ttlMs?: number): Promise<void>;
+  delete(key: string): Promise<boolean>;
+  clear(): Promise<void>;
+}
+```
+
+---
+
+### API: Advanced
+
+These APIs are for advanced use cases requiring custom implementations.
+
+#### `createFetchClient(options?)`
+
+Creates a custom HTTP client.
+
+```typescript
+import { createFetchClient } from '@pingidentity/aic-mcp-sdk';
+
+const httpClient = createFetchClient({
+  timeout: 10000,
+});
+```
+
+#### `createMemoryCache(ttlMs)`
+
+Creates a memory cache with TTL.
+
+```typescript
+import { createMemoryCache } from '@pingidentity/aic-mcp-sdk';
+
+const cache = createMemoryCache(3600000); // 1 hour TTL
+```
+
+#### `createCachedDiscoveryFetcher(options)`
+
+Creates a cached OIDC discovery document fetcher.
+
+```typescript
+import { createCachedDiscoveryFetcher } from '@pingidentity/aic-mcp-sdk';
+
+const fetcher = createCachedDiscoveryFetcher({
+  amUrl: 'https://your-tenant.forgeblocks.com',
+  realmPath: '/am/oauth2/realms/root/realms/alpha',
+});
+```
+
+#### `verifyPkceSupport(discovery)` / `requirePkceSupport(discovery)`
+
+Verify PKCE S256 support per MCP spec.
+
+```typescript
+import { verifyPkceSupport, requirePkceSupport } from '@pingidentity/aic-mcp-sdk';
+
+const support = verifyPkceSupport(discoveryDocument);
+if (!support.supported) {
+  console.warn(support.warning);
+}
+
+// Or require it (returns Result)
+const result = requirePkceSupport(discoveryDocument);
+if (result.isErr()) {
+  throw new Error(result.error.message);
+}
+```
+
+#### `buildClientMetadataDocument(options)` / `fetchClientMetadataDocument(url)`
+
+Build or fetch MCP Client ID Metadata Documents.
+
+```typescript
+import { buildClientMetadataDocument, fetchClientMetadataDocument } from '@pingidentity/aic-mcp-sdk';
+
+// Build metadata
+const metadata = buildClientMetadataDocument({
+  clientId: 'https://mcp.example.com/client.json',
+  clientName: 'My MCP Client',
+  redirectUris: ['https://mcp.example.com/callback'],
+});
+
+// Fetch from URL
+const result = await fetchClientMetadataDocument({
+  clientIdUrl: 'https://mcp.example.com/client.json',
+});
+```
+
+---
+
+## Error Handling
+
+### Error Codes
 
 | Code | Description | HTTP Status |
 |------|-------------|-------------|
 | `MISSING_TOKEN` | No token provided | 401 |
-| `MALFORMED_TOKEN` | Token format invalid or missing required claims | 401 |
+| `MALFORMED_TOKEN` | Invalid token format | 401 |
 | `EXPIRED_TOKEN` | Token has expired | 401 |
 | `INVALID_SIGNATURE` | JWT signature verification failed | 401 |
-| `INVALID_ISSUER` | Token issuer doesn't match expected | 401 |
-| `INVALID_AUDIENCE` | Token audience doesn't match expected | 401 |
-| `REVOKED_TOKEN` | Token has been revoked (introspection) | 401 |
-| `INSUFFICIENT_SCOPE` | Token lacks required scopes | 403 |
+| `INVALID_ISSUER` | Token issuer mismatch | 401 |
+| `INVALID_AUDIENCE` | Token audience mismatch | 401 |
+| `REVOKED_TOKEN` | Token has been revoked | 401 |
+| `INSUFFICIENT_SCOPE` | Missing required scopes | 403 |
 
-## Complete Example
+### Token Validation Flow
 
-See the [MCP Server Example](../../apps/mcp-server-example) for a complete implementation including:
-
-- Token validation with environment-based configuration
-- Protected tool handlers with scope requirements
-- RFC 9728 compliant error responses
-- Graceful error handling
-
-```typescript
-import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import {
-  createTokenValidator,
-  createWithAuth,
-  AuthenticationError,
-  AuthorizationError,
-  createProtectedResourceMetadata,
-  formatWwwAuthenticateHeader,
-} from '@pingidentity/aic-mcp-sdk';
-
-// Create validator
-const validator = createTokenValidator({
-  amUrl: process.env.AM_URL!,
-  clientId: process.env.AM_CLIENT_ID!,
-  clientSecret: process.env.AM_CLIENT_SECRET, // Optional
-});
-
-// Create auth wrapper
-const withAuth = createWithAuth({ validator });
-
-// Create server
-const server = new McpServer({ name: 'my-server', version: '1.0.0' });
-
-// Register protected tool
-server.registerTool(
-  'protected_action',
-  {
-    description: 'A protected action requiring authentication',
-    inputSchema: { data: z.string() },
-  },
-  withAuth({ requiredScopes: ['action:execute'] }, async ({ data }, extra) => {
-    const user = extra.authInfo?.extra?.sub;
-    // ... perform action
-    return { content: [{ type: 'text', text: `Done by ${user}` }] };
-  })
-);
-
-// Start server
-const transport = new StdioServerTransport();
-await server.connect(transport);
 ```
+1. Check token exists          → MISSING_TOKEN if empty
+2. Detect format               → JWT (3 parts) or opaque
+3. For JWTs:
+   a. Fetch OIDC discovery     → Cached 1 hour
+   b. Verify signature (JWKS)  → INVALID_SIGNATURE on failure
+   c. Validate claims          → EXPIRED_TOKEN, INVALID_ISSUER, etc.
+   d. Check scopes             → INSUFFICIENT_SCOPE if missing
+4. For opaque tokens:
+   a. Call introspection       → Requires clientSecret
+   b. Check active status      → REVOKED_TOKEN if inactive
+   c. Check scopes             → INSUFFICIENT_SCOPE if missing
+```
+
+---
 
 ## Environment Variables
 
 | Variable | Description | Required |
 |----------|-------------|----------|
-| `AM_URL` | Base URL of the AM instance | Yes |
+| `AM_URL` | Base URL of the AIC instance | Yes |
 | `AM_CLIENT_ID` | OAuth client ID | Yes |
 | `AM_CLIENT_SECRET` | OAuth client secret | No* |
 | `AM_REALM_PATH` | Realm path override | No |
-| `AM_ACCESS_TOKEN` | Access token (for stdio transport) | No |
+| `AM_ACCESS_TOKEN` | Access token (stdio transport) | No |
 
-\* Required for opaque token introspection
+\* Required for opaque token introspection and confidential client flows
+
+---
 
 ## Requirements
 
@@ -392,7 +648,6 @@ await server.connect(transport);
 
 - `jose` - JWT signing and verification
 - `neverthrow` - Type-safe error handling
-- `@modelcontextprotocol/sdk` (peer, optional) - MCP SDK types
 
 ## License
 

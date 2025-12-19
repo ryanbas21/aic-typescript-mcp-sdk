@@ -363,6 +363,8 @@ export const createTokenValidator = (
       ...(introspection.jti !== undefined ? { jti: introspection.jti } : {}),
       ...(introspection.scope !== undefined ? { scope: introspection.scope } : {}),
       ...(introspection.client_id !== undefined ? { client_id: introspection.client_id } : {}),
+      // Include act claim for delegation (RFC 8693)
+      ...(introspection.act !== undefined ? { act: introspection.act } : {}),
     };
 
     // Validate scopes if required

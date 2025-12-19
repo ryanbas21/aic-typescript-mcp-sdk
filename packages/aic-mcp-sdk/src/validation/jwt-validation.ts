@@ -129,6 +129,13 @@ export const verifyJwt = async (
       (validatedClaims as Record<string, unknown>)['client_id'] = clientId;
     }
 
+    // Copy act claim for delegation (RFC 8693)
+    // The act claim contains nested actor information for token exchange
+    const act = payload['act'];
+    if (act !== undefined) {
+      (validatedClaims as Record<string, unknown>)['act'] = act;
+    }
+
     return ok(validatedClaims);
   } catch (error) {
     return err(mapJoseError(error));

@@ -33,6 +33,19 @@ export interface OidcDiscoveryDocument {
   readonly id_token_signing_alg_values_supported?: readonly string[];
   /** Supported claims */
   readonly claims_supported?: readonly string[];
+  /**
+   * Supported PKCE code challenge methods (RFC 7636).
+   * MCP spec requires this field to be present and include "S256".
+   * @see https://modelcontextprotocol.io/specification/draft/basic/authorization
+   */
+  readonly code_challenge_methods_supported?: readonly string[];
+  /**
+   * Whether the server supports Client ID Metadata Documents.
+   * When true, clients can use HTTPS URLs as client_id values,
+   * pointing to JSON documents containing client metadata.
+   * @see https://modelcontextprotocol.io/specification/draft/basic/authorization
+   */
+  readonly client_id_metadata_document_supported?: boolean;
 }
 
 /**
@@ -63,6 +76,12 @@ export interface IntrospectionResponse {
   readonly iss?: string;
   /** JWT ID */
   readonly jti?: string;
+  /** Actor claim for delegation (RFC 8693) */
+  readonly act?: {
+    readonly sub: string;
+    readonly iss?: string;
+    readonly act?: IntrospectionResponse['act'];
+  };
 }
 
 /**
